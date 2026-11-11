@@ -1,0 +1,10 @@
+*.exe
+settings.json
+profile.json
+extra-mappings.txt
+LoadOrder-mappings.txt
+build-report.txt
+url.txt
+log.txt
+Output/
+backups/

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Arctium Mod Manager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script type="importmap">{ "imports": { "three": "/web/vendor/three.module.min.js" } }</script>
+<style>
+:root { --bg:#16181d; --panel:#1e2128; --panel2:#262a33; --line:#333845; --text:#e6e8ee; --muted:#9aa1b1; --accent:#e0a84a; --ok:#6cc18a; --bad:#e06c6c; --sel:#3a4152; }
+* { box-sizing: border-box; }
+html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:13px/1.4 "Segoe UI", system-ui, sans-serif; }
+button, select, input { font:inherit; color:var(--text); background:var(--panel2); border:1px solid var(--line); border-radius:6px; padding:4px 8px; }
+button { cursor:pointer; } button:hover { border-color:var(--accent); } button.primary { background:var(--accent); color:#1b1b1b; border-color:var(--accent); font-weight:600; }
+button:disabled { opacity:.5; cursor:default; }
+header { display:flex; align-items:center; gap:16px; padding:8px 14px; background:var(--panel); border-bottom:1px solid var(--line); }
+header h1 { font-size:15px; margin:0; color:var(--accent); }
+nav { display:flex; gap:4px; }
+nav button { background:none; border:none; padding:6px 12px; border-radius:6px; }
+nav button.on { background:var(--sel); }
+#status { margin-left:auto; color:var(--muted); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:50vw; }
+main { position:absolute; top:46px; left:0; right:0; bottom:0; }
+.tab { position:absolute; inset:0; display:none; }
+.tab.on { display:flex; }
+.side { width:330px; min-width:260px; background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; }
+.side .tools { padding:8px; display:flex; flex-direction:column; gap:6px; border-bottom:1px solid var(--line); }
+.list { flex:1; overflow:auto; }
+.list .grp { padding:6px 10px; color:var(--accent); font-weight:600; background:var(--panel2); position:sticky; top:0; cursor:pointer; user-select:none; }
+.list .it { padding:4px 10px 4px 18px; cursor:pointer; display:flex; gap:6px; align-items:baseline; }
+.list .it:hover { background:#2a2f3a; } .list .it.on { background:var(--sel); }
+.list .it small { color:var(--muted); margin-left:auto; white-space:nowrap; }
+.center { flex:1; display:flex; flex-direction:column; min-width:0; }
+.views { flex:1; display:flex; gap:2px; background:#0f1014; min-height:0; }
+.view { flex:1; position:relative; min-width:0; }
+.view canvas { width:100%; height:100%; display:block; }
+.view .lbl { position:absolute; top:8px; left:8px; right:8px; display:flex; gap:6px; align-items:center; }
+.view .lbl select { max-width:100%; background:rgba(30,33,40,.9); }
+.view .msg { position:absolute; bottom:8px; left:8px; right:8px; color:var(--muted); font-size:12px; pointer-events:none; }
+.view .tex2d { position:absolute; inset:44px 8px 30px 8px; display:none; align-items:center; justify-content:center; }
+.view .tex2d canvas { max-width:100%; max-height:100%; width:auto; height:auto; image-rendering:auto; background:repeating-conic-gradient(#2a2d35 0% 25%, #22252c 0% 50%) 50% / 16px 16px; }
+.props { width:330px; background:var(--panel); border-left:1px solid var(--line); overflow:auto; padding:10px; }
+.props h3 { margin:12px 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+.props label { display:flex; gap:6px; align-items:center; margin:3px 0; }
+.props select { width:100%; }
+.row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.geos { display:grid; grid-template-columns:repeat(4, 1fr); gap:2px 6px; font-size:12px; }
+.geos label { margin:0; }
+.note { color:var(--muted); font-size:12px; }
+.pill { display:inline-block; padding:0 6px; border-radius:9px; background:var(--panel2); border:1px solid var(--line); font-size:11px; color:var(--muted); }
+.pill.on { color:#1b1b1b; background:var(--ok); border-color:var(--ok); }
+.pill.sel { border-color:var(--accent); color:var(--accent); font-weight:600; }
+.pill.part.inb { border-color:var(--ok); }
+#gList .it.on { box-shadow: inset 3px 0 0 var(--accent); }
+.pill.warn { color:#1b1b1b; background:var(--accent); border-color:var(--accent); }
+.page { flex:1; overflow:auto; padding:14px 18px; }
+table { border-collapse:collapse; width:100%; }
+td, th { padding:4px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:middle; }
+th { color:var(--muted); font-weight:500; font-size:12px; }
+tr.off td { opacity:.5; }
+tr.cur { background:var(--sel); }
+.ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--accent); }
+.thumbs { display:flex; gap:8px; flex-wrap:wrap; }
+.thumb { border:2px solid var(--line); border-radius:6px; padding:4px; cursor:pointer; width:170px; background:var(--panel2); }
+.thumb.on { border-color:var(--accent); }
+.thumb canvas { width:160px; height:120px; object-fit:contain; display:block; background:repeating-conic-gradient(#2a2d35 0% 25%, #22252c 0% 50%) 50% / 12px 12px; }
+.thumb div { font-size:11px; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#busy { position:fixed; inset:0; background:rgba(10,11,14,.75); display:flex; align-items:center; justify-content:center; z-index:10; font-size:15px; }
+#busy.hide { display:none; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px; }
+.card h2 { margin:0 0 8px; font-size:14px; }
+code { background:var(--panel2); padding:1px 5px; border-radius:4px; }
+pre { background:var(--panel2); padding:8px; border-radius:6px; max-height:300px; overflow:auto; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Arctium Mod Manager</h1>
+  <nav id="nav">
+    <button data-tab="models" class="on">Models</button>
+    <button data-tab="gear">Gear try-on</button>
+    <button data-tab="items">Items</button>
+    <button data-tab="order">Load order &amp; build</button>
+  </nav>
+  <div id="status">Starting...</div>
+  <button id="quit" title="Stop the helper program">Quit</button>
+</header>
+<main>
+  <!-- MODELS + GEAR share the 3D area -->
+  <section class="tab on" id="tab-models">
+    <div class="side">
+      <div class="tools">
+        <input id="mSearch" placeholder="Search models (e.g. succubus, orc female)">
+        <label class="note"><input type="checkbox" id="mOnlyModded" checked> Only show models that have mod versions</label>
+      </div>
+      <div class="list" id="mList"></div>
+    </div>
+    <div class="center">
+      <div class="views">
+        <div class="view"><canvas id="cA"></canvas><div class="tex2d" id="tA"><canvas></canvas></div>
+          <div class="lbl"><select id="srcA"></select></div><div class="msg" id="msgA"></div></div>
+        <div class="view" id="viewB"><canvas id="cB"></canvas><div class="tex2d" id="tB"><canvas></canvas></div>
+          <div class="lbl"><select id="srcB"></select></div><div class="msg" id="msgB"></div></div>
+      </div>
+    </div>
+    <div class="props" id="mProps">
+      <div class="note">Pick a model on the left. The left view and the right view can each show any version: your build, a single mod, or the original game file.</div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-gear">
+    <div class="side">
+      <div class="tools">
+        <div class="note">Game gear that your mods re-texture. It is tried on the character you picked on the Models tab.</div>
+        <input id="gSearch" placeholder="Search sets">
+        <select id="gSource"></select>
+      </div>
+      <div class="list" id="gList"></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-items">
+    <div class="side">
+      <div class="tools">
+        <input id="iSearch" placeholder="Search game items by name">
+        <label class="note"><input type="checkbox" id="iOnlyModded" checked> Only items that have replacers</label>
+      </div>
+      <div class="list" id="iList"><div class="note" style="padding:10px">Loading the item tables happens the first time you open this tab.</div></div>
+    </div>
+    <div class="page" id="iPage"></div>
+  </section>
+
+  <section class="tab" id="tab-order">
+    <div class="page" id="oPage"></div>
+  </section>
+</main>
+<div id="busy">Loading...</div>
+<script type="module" src="/web/app.js"></script>
+</body>
+</html>
