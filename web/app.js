@@ -266,22 +266,24 @@ async function scanSources() {
   // profile sources outside the mods root
   for (const s of S.profile.sources) if (!s.path.toLowerCase().startsWith(S.info.modsRoot.toLowerCase())) { try { await scanUnder(s.path); } catch {} }
 
-  // alternate versions shipped in sub folders (e.g. creature/alleria/topless/alleria.m2 -> creature/alleria/alleria.m2)
+  // alternate versions shipped in sub folders (e.g. creature/alleria/topless/alleria.m2 -> creature/alleria/alleria.m2,
+  // creature/jaina3/body options/armbinder/jaina3.m2 -> creature/jaina3/jaina3.m2). A sub folder becomes a variant when one of its
+  // files replaces a known file one or more folders up; then every file in it moves up to that folder.
   const variants = [];
   for (const r of roots.values()) {
-    const vmap = new Map();
-    for (const [lc, f] of r.files) {
+    const base = new Map(); // vdir -> folder its files belong in
+    for (const lc of r.files.keys()) {
       if (S.idByPath.has(lc)) continue;
       const segs = lc.split("/");
-      if (segs.length < 3) continue;
-      const target = [...segs.slice(0, -2), segs[segs.length - 1]].join("/");
-      if (!S.idByPath.has(target) && !r.files.has(target)) continue;
-      const vdir = segs.slice(0, -1).join("/");
-      let v = vmap.get(vdir); if (!v) vmap.set(vdir, (v = new Map()));
-      v.set(target, f);
+      for (let k = segs.length - 2; k >= 2; k--) {
+        const target = [...segs.slice(0, k), segs[segs.length - 1]].join("/");
+        if (S.idByPath.has(target) || r.files.has(target)) { const vdir = segs.slice(0, -1).join("/"); if (!base.has(vdir) || base.get(vdir).length > k) base.set(vdir, segs.slice(0, k)); break; }
+      }
     }
-    for (const [vdir, files] of vmap) {
-      for (const lc of [...r.files.keys()]) if (lc.startsWith(vdir + "/")) r.files.delete(lc);
+    for (const [vdir, to] of base) {
+      const files = new Map();
+      for (const [lc, f] of r.files) if (lc.startsWith(vdir + "/") && !lc.slice(vdir.length + 1).includes("/")) files.set([...to, lc.slice(vdir.length + 1)].join("/"), f);
+      for (const lc of [...r.files.keys()]) if (lc.startsWith(vdir + "/") && !lc.slice(vdir.length + 1).includes("/")) r.files.delete(lc);
       variants.push({ parent: r, vdir, files });
     }
   }
