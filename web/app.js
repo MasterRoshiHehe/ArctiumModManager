@@ -140,32 +140,44 @@ async function saveProfile() {
 // When mods are reorganized, <mods root>\_reorg_map.json lists where each old folder went. Saved paths in profile.json
 // (load order, picks, hair, swaps, presets) are rewritten to the new places. One old folder can have several new ones.
 const normP = (p) => String(p || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+// _reorg_map.json: { ops: [[src, dst, note], ...] } with src relative to the OLD mods root and dst relative to the new one.
+// note: "whole", "race-split" (one old folder split into several), "pack:<set>" (merged into a pack), "loose file", "archive".
+// Absolute paths ({from,to} objects or [from,to]) work too.
 async function readMoveMap() {
-  let j; try { j = JSON.parse(await apiText("/api/read", { p: winJoin(S.info.modsRoot, "_reorg_map.json") })); } catch { return null; }
-  const ops = Array.isArray(j) ? j : j.ops || j.moves || j.map || [];
+  let j; try { j = JSON.parse((await apiText("/api/read", { p: winJoin(S.info.modsRoot, "_reorg_map.json") })).replace(/^\uFEFF/, "")); } catch (e) { console.warn("reorg map", e); return null; }
+  const ops = (Array.isArray(j) ? j : j.ops || []).map((o) => Array.isArray(o) ? o : [o.from ?? o.src ?? o.source, o.to ?? o.dst ?? o.dest, o.note || ""]).filter((o) => typeof o[0] === "string" && typeof o[1] === "string");
+  const abs = (v) => /^[a-z]:[\\/]|^\\\\/i.test(v);
+  const clean = (v) => v.replace(/\//g, "\\").replace(/\\+$/, "");
+  // the old root isn't stored anywhere: find the folder that, joined with the ops' sources, gives the saved paths
+  const saved = S.profile.sources.map((x) => normP(x.path.split("#")[0]));
+  const votes = new Map();
+  for (const [src] of ops) { if (abs(src)) continue; const sn = "\\" + normP(src); for (const p of saved) if (p.endsWith(sn)) { const r = p.slice(0, p.length - sn.length); votes.set(r, (votes.get(r) || 0) + 1); } }
+  const oldRoot = [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   const pairs = [];
-  const isPath = (v) => typeof v === "string" && /^[a-z]:\\|^\\\\/i.test(v.replace(/\//g, "\\"));
-  const add = (from, to) => { if (isPath(from) && isPath(to)) pairs.push([normP(from), to.replace(/\//g, "\\").replace(/\\+$/, "")]); };
-  if (!Array.isArray(ops) && typeof ops === "object") { for (const [k, v] of Object.entries(ops)) [].concat(v).forEach((t) => add(k, t)); return pairs; }
-  for (const op of ops) {
-    if (Array.isArray(op)) { add(op[0], op[1]); continue; }
-    if (!op || typeof op !== "object") continue;
-    const keys = Object.keys(op);
-    const fk = keys.find((k) => /^(from|src|source|old|orig)/i.test(k)), tk = keys.find((k) => /^(to|dst|dest|target|new)/i.test(k));
-    if (fk && tk) [].concat(op[tk]).forEach((t) => add(op[fk], t));
+  for (const [src, dst, note] of ops) {
+    if (/^(archive|loose)/i.test(note || "")) continue;
+    const from = abs(src) ? normP(src) : oldRoot ? oldRoot + "\\" + normP(src) : null;
+    if (!from) continue;
+    // new Arctium mod folder = Models|Skins\<Race>\<Author>\<Mod>, otherwise <Category>\<Author>\<Mod>
+    const parts = clean(dst).split("\\");
+    const rel = abs(dst) ? null : parts.slice(0, /^(models|skins)$/i.test(parts[0]) ? 4 : 3).join("\\");
+    const to = rel ? winJoin(S.info.modsRoot, rel) : clean(dst);
+    pairs.push([from, to, note || "", rel && parts.length > rel.split("\\").length]);
   }
   return pairs;
 }
 function movedTargets(pairs, path) {
   const [base, ...v] = String(path).split("#"), suffix = v.length ? "#" + v.join("#") : "", b = normP(base);
   const out = [];
-  for (const [from, to] of pairs) {
+  for (const [from, to, note, trimmed] of pairs) {
     if (b === from) out.push(to + suffix);
-    else if (b.startsWith(from + "\\")) out.push(to + base.replace(/\//g, "\\").slice(from.length) + suffix);
-    else if (from.startsWith(b + "\\") && !suffix) out.push(to); // an old container folder: everything that came out of it
+    else if (b.startsWith(from + "\\")) out.push(trimmed ? to + suffix : to + clean2(base).slice(from.length) + suffix);
+    // the saved folder was the mod root and its game folders went elsewhere (a pack split per race, Tauri\Item ...)
+    else if (from.startsWith(b + "\\") && !suffix && GAME_TOP.has(from.slice(b.length + 1).split("\\")[0])) out.push(to);
   }
   return [...new Set(out)];
 }
+const clean2 = (v) => v.replace(/\//g, "\\").replace(/\\+$/, "");
 async function migrateMoved() {
   const outside = S.profile.sources.filter((s) => !normP(s.path).startsWith(normP(S.info.modsRoot) + "\\"));
   if (!outside.length) return null;
@@ -180,7 +192,8 @@ async function migrateMoved() {
   if (!map.size) return null;
   S.profile.sources = out;
   S.profile.movedFrom = Object.fromEntries(map);
-  await saveProfile();
+  // written directly: saveProfile() takes the order from S.sources, which isn't scanned yet
+  await api("/api/write", { p: profilePath() }, { method: "POST", body: JSON.stringify(S.profile, null, 1) });
   return map;
 }
 // picks / hair / swaps / presets name a source by key: use the new folder that actually has the file
@@ -224,16 +237,25 @@ async function scanSources() {
     r.files.set(lc, { rel, size });
   };
   const scanUnder = async (base) => {
-    for (const f of await scanTree(base)) {
-      const segs = f.rel.split("/");
-      if (segs[0].startsWith("_")) continue; // _Archives, _covered_by_other_mods ... are not loaded
-      const i = findRoot(segs);
-      if (i < 0) { // not a game path: keep txt mapping files next to models
-        if (/\.txt$/i.test(f.rel)) { const j = segs.findIndex((s) => GAME_TOP.has(s.toLowerCase())); if (j >= 0) addFile(winJoin(base, segs.slice(0, j).join("/")), segs.slice(j).join("/"), f.size); }
-        continue;
+    const files = (await scanTree(base)).map((f) => ({ ...f, segs: f.rel.split("/") })).filter((f) => !f.segs[0].startsWith("_")); // _Archives ... are not loaded
+    // pass 1: files whose path ends in a known game path fix where their mod folder starts
+    const known = (segs) => { for (let i = 0; i < segs.length - 1; i++) if (S.idByPath.has(segs.slice(i).join("/").toLowerCase())) return i; return -1; };
+    const roots = new Set();
+    for (const f of files) { f.i = known(f.segs); if (f.i >= 0) roots.add(f.segs.slice(0, f.i).join("/").toLowerCase()); }
+    const byLen = [...roots].sort((a, b) => b.length - a.length);
+    // pass 2: other files belong to the mod folder they sit in (so a "Models" category folder isn't taken for the game's models folder)
+    for (const f of files) {
+      let i = f.i;
+      if (i < 0) {
+        const lc = f.rel.toLowerCase();
+        const r = byLen.find((x) => x === "" ? false : lc.startsWith(x + "/"));
+        if (r !== undefined) i = r.split("/").length;
+        else if (!/\.txt$/i.test(f.rel)) i = findRoot(f.segs);
+        else { const j = f.segs.findIndex((x) => GAME_TOP.has(x.toLowerCase())); i = j; }
       }
-      const rootAbs = i === 0 ? base : winJoin(base, segs.slice(0, i).join("/"));
-      addFile(rootAbs, segs.slice(i).join("/"), f.size);
+      if (i < 0 || i >= f.segs.length) continue;
+      const rootAbs = i === 0 ? base : winJoin(base, f.segs.slice(0, i).join("/"));
+      addFile(rootAbs, f.segs.slice(i).join("/"), f.size);
     }
   };
   await scanUnder(S.info.modsRoot);
@@ -505,7 +527,15 @@ function applyCustomGeo() {
     const want = g.type * 100 + g.id;
     for (const id of cur.geo.ids) if (Math.floor(id / 100) === g.type && (g.type !== 0 || id !== 0)) cur.geo.on.delete(id);
     if (cur.geo.ids.includes(want)) cur.geo.on.add(want);
+    if (g.type === 0 && g.id > 0) cur.hairBase = want;
   }
+}
+// Hair styles (parts 1-99): the left view shows the style picked in the hair panel, the right view keeps the
+// style from the character options, so trying hairstyles on your body never changes the comparison side.
+const isHairId = (id) => id > 0 && id < 100;
+function geoOn(side, id) {
+  if (side === 1 && isHairId(id) && cur.hairBase != null && cur.geo.ids.includes(cur.hairBase)) return id === cur.hairBase;
+  return cur.geo.on.has(id);
 }
 async function composeChr(type, mode) {
   const res = CHR.resolve(cur.cm, cur.custom);
@@ -651,17 +681,17 @@ async function composeBody(mode) {
 
 // --- render both sides
 let refreshSeq = 0;
-async function loadSide(mode) {
+async function loadSide(mode, side = 0) {
   const m2b = await readLC(cur.modelLC, mode);
   const model = parseM2(m2b);
   let skinB;
   try { skinB = model.skinFids[0] ? await readFid(model.skinFids[0], mode) : await readLC(cur.modelLC.replace(/\.m2$/, "00.skin"), mode); }
   catch { skinB = await readLC(cur.modelLC.replace(/\.m2$/, "00.skin"), mode); }
   const mm = modelMode(mode);
-  if (mm === "build" && Object.keys(hairCfg(cur.modelLC)).length) {
+  if (side === 0 && mm === "build" && Object.keys(hairCfg(cur.modelLC)).length) {
     try { const r = await mixedFor(cur.modelLC, m2b, skinB); cur.hairNotes = r.notes; cur.hairErr = null; return { model: parseM2(r.m2), skin: parseSkin(r.skin), mixed: true }; }
     catch (e) { cur.hairErr = e.message; cur.hairNotes = null; }
-  } else if (mm === "build") { cur.hairErr = null; cur.hairNotes = null; }
+  } else if (side === 0 && mm === "build") { cur.hairErr = null; cur.hairNotes = null; }
   return { model, skin: parseSkin(skinB) };
 }
 // --- hair mixer: profile.hair[modelLc] = { styleId: { src: sourceKey | "@game", fit } }
@@ -700,49 +730,73 @@ function mixedFor(lc, m2b, skinB) {
   if (mixCache && mixCache.sig === sig) return mixCache.p;
   const p = (async () => {
     const donors = [];
-    for (const [id, c] of Object.entries(cfg)) { const d = await donorData(lc, c.src); donors.push({ id: +id, m2: d.m2, skin: d.skin, bones: d.bones, fit: c.fit !== false }); }
+    for (const [id, c] of Object.entries(cfg)) { const d = await donorData(lc, c.src); donors.push({ id: +id, from: c.from != null ? +c.from : +id, m2: d.m2, skin: d.skin, bones: d.bones, fit: c.fit !== false }); }
     return mixHair({ m2: m2b, skin: skinB, bones: await bonesFor(m2b, "build") }, donors);
   })();
   mixCache = { sig, p }; p.catch(() => { if (mixCache && mixCache.sig === sig) mixCache = null; });
   return p;
 }
-async function setHair(id, key, fit) {
+async function setHair(id, key, fit, from) {
   const all = S.profile.hair, c = (all[cur.modelLC] ||= {});
-  if (!key) delete c[id]; else c[id] = { src: key, fit: fit ?? c[id]?.fit ?? true };
+  if (!key) delete c[id]; else c[id] = { src: key, from: from ?? c[id]?.from ?? id, fit: fit ?? c[id]?.fit ?? true };
   if (!Object.keys(c).length) delete all[cur.modelLC];
   for (const x of cur.geo.ids) if (x > 0 && x < 100) cur.geo.on.delete(x);
   cur.geo.on.add(id);
   await saveProfile(); refresh();
 }
 function hairPanel(P) {
-  const lc = cur.modelLC, ids = cur.geo.ids.filter((x) => x > 0 && x < 100);
+  const lc = cur.modelLC, ids = cur.geo.ids.filter(isHairId);
   if (!lc || !ids.length) return;
   const body = sourceFor(lc, "build"), cfg = hairCfg(lc);
-  const donors = S.sources.filter((s) => s.files.has(lc) && s !== body);
-  if (!donors.length && !body) return;
+  const donors = S.sources.filter((s) => s.files.has(lc));
   const shown = ids.find((x) => cur.geo.on.has(x)) ?? ids[0];
   const names = cur.cm ? CHR.hairNames(cur.cm) : new Map();
-  const label = (id) => names.has(id) ? "Style " + names.get(id) : "Part " + id + " (no style uses it)";
-  const pend = [];
-  const sel = (id) => {
-    const s = el("select", { onchange: () => setHair(id, s.value) });
-    s.append(el("option", { value: "" }, "Body's own" + (body ? "" : " (original game)")));
-    if (body) s.append(el("option", { value: "@game", selected: cfg[id]?.src === "@game" }, "Original game"));
-    for (const d of donors) s.append(el("option", { value: d.key, selected: cfg[id]?.src === d.key }, d.name + (d.enabled ? "" : " (off)")));
-    pend.push([id, s]);
-    return s;
+  const label = (id) => names.has(id) ? "Style " + names.get(id) : "Part " + id;
+  // one row per hairstyle slot of your body: [mod] [which of its hairstyles]
+  const row = (id) => {
+    const c = cfg[id];
+    const modSel = el("select", { style: "flex:1;min-width:0" });
+    modSel.append(el("option", { value: "" }, "Unchanged (your body's own)"));
+    modSel.append(el("option", { value: "@game", selected: c?.src === "@game" }, "Original game"));
+    for (const d of donors) modSel.append(el("option", { value: d.key, selected: c?.src === d.key }, d.name + (d === body ? " (your body)" : d.enabled ? "" : " (off)")));
+    const styleSel = el("select", { style: "width:150px", disabled: !c });
+    const fillStyles = async (key, keep) => {
+      styleSel.innerHTML = "";
+      if (!key) { styleSel.append(el("option", { value: "" }, "-")); styleSel.disabled = true; return; }
+      styleSel.append(el("option", { value: "" }, "reading..."));
+      let have; try { have = [...(await donorData(lc, key)).ids].sort((a, b) => a - b); } catch { have = []; }
+      styleSel.innerHTML = "";
+      if (!have.length) { styleSel.append(el("option", { value: "" }, "(no hairstyles)")); styleSel.disabled = true; return; }
+      for (const h of have) styleSel.append(el("option", { value: h, selected: h === keep }, label(h)));
+      if (!have.includes(keep)) styleSel.value = String(have.includes(id) ? id : have[0]);
+      styleSel.disabled = false;
+      return +styleSel.value;
+    };
+    modSel.onchange = async () => {
+      const key = modSel.value;
+      if (!key) return setHair(id, null);
+      const from = await fillStyles(key, c?.from ?? id);
+      if (from) setHair(id, key, undefined, from);
+    };
+    styleSel.onchange = () => setHair(id, modSel.value, undefined, +styleSel.value);
+    if (c) fillStyles(c.src, c.from ?? id); else fillStyles("", 0);
+    return el("div", {},
+      el("div", { class: "note", style: "cursor:pointer;margin-top:6px", title: "Click to show this hairstyle on the left", onclick: () => { for (const x of ids) cur.geo.on.delete(x); cur.geo.on.add(id); refresh(); } },
+        (id === shown ? "▶ " : "") + label(id) + (c ? "  ←  " : "")),
+      el("div", { class: "row" }, modSel, styleSel),
+      c ? el("label", { title: "Moves the hair so the other model's head bone sits on your body's head bone. Turn off if the hair floats." },
+        el("input", { type: "checkbox", checked: c.fit !== false, onchange: (ev) => setHair(id, c.src, ev.target.checked, c.from) }), "Fit to head") : null);
   };
-  P.append(el("h3", {}, "Hairstyles"), el("div", { class: "note" }, `Take a hairstyle from another version of this model and put it on your body model (${body ? body.name : "original game"}). Shown on the "Your build" side; the build writes a combined model into Output.`));
-  P.append(el("label", {}, el("span", { style: "width:140px", title: "hair part " + shown }, label(shown)), sel(shown)));
-  if (cfg[shown]) P.append(el("label", { title: "Moves the hair so the other model's head bone sits on your body's head bone. Turn off if the hair floats." }, el("input", { type: "checkbox", checked: cfg[shown].fit !== false, onchange: (ev) => setHair(shown, cfg[shown].src, ev.target.checked) }), "Fit to the head"));
+  P.append(el("h3", {}, "Hairstyles"), el("div", { class: "note" },
+    `Each hairstyle number of your body model (${body ? body.name : "original game"}) can use any hairstyle from any mod (or the original game). ` +
+    `Example: put mod A's hairstyle 7 on your hairstyle 2. Only the left view shows it, when it is set to "Your build"; the right view is never changed. Build writes the combined model into Output.`));
+  P.append(row(shown));
   if (cur.hairErr) P.append(el("div", { class: "note", style: "color:#f88" }, "Could not mix: " + cur.hairErr));
   else if (cur.hairNotes) P.append(el("div", { class: "note" }, cur.hairNotes.join(" · ")));
   const n = Object.keys(cfg).length;
-  const all = el("details", {}, el("summary", {}, `All styles${n ? ` (${n} swapped)` : ""}`));
-  for (const id of [...ids].sort((a, b) => names.has(b) - names.has(a) || a - b)) if (id !== shown) all.append(el("label", {}, el("span", { style: "width:140px;cursor:pointer", title: "Click to show it", onclick: () => { for (const x of ids) cur.geo.on.delete(x); cur.geo.on.add(id); refresh(); } }, label(id)), sel(id)));
+  const all = el("details", {}, el("summary", {}, `All hairstyles${n ? ` (${n} changed)` : ""}`));
+  for (const id of [...ids].sort((a, b) => names.has(b) - names.has(a) || a - b)) if (id !== shown) all.append(row(id));
   P.append(all);
-  // grey out mods that don't have a style
-  for (const [id, s] of pend) for (const o of s.options) if (o.value) donorData(lc, o.value).then((d) => { if (!d.ids.has(id)) { o.disabled = !o.selected; o.textContent += " (doesn't have it)"; } }).catch(() => { o.disabled = !o.selected; o.textContent += " (can't read)"; });
 }
 async function sideTextures(model, mode) {
   const texs = [];
@@ -775,13 +829,14 @@ async function refresh(first = false) {
   }
   const msgs = [$("#msgA"), $("#msgB")];
   msgs.forEach((m) => (m.textContent = "Loading..."));
-  const loaded = await Promise.all(sides.map((m) => loadSide(m).catch((e) => ({ error: e }))));
+  const loaded = await Promise.all(sides.map((m, i) => loadSide(m, i).catch((e) => ({ error: e }))));
   if (seq !== refreshSeq) return;
   const ok = loaded.filter((x) => !x.error);
   if (!cur.inited && ok.length) {
     cur.slots = defaultSlots(ok[0].model, cur.entry.dir);
     const ids = new Set(); for (const x of ok) for (const sm of x.skin.submeshes) ids.add(sm.id);
     cur.geo = defaultGeo({ submeshes: [...ids].map((id) => ({ id })) });
+    cur.hairBase = [...cur.geo.on].find(isHairId) ?? null;
     if (cur.char && CHR) { cur.cm = CHR.modelFor(S.idByPath.get(cur.modelLC)) || null; if (cur.cm) { cur.custom = CHR.defaults(cur.cm); applyCustomGeo(); } }
     cur.inited = true;
     const ap = (S.profile.lastPreset || {})[cur.modelLC];
@@ -793,7 +848,7 @@ async function refresh(first = false) {
     const texs = await sideTextures(x.model, sides[i]);
     if (seq !== refreshSeq) return;
     hide2D(i);
-    const box = V.setModel(i, x.model, x.skin, (ti) => texs[ti] || null, (id) => cur.geo.on.has(id));
+    const box = V.setModel(i, x.model, x.skin, (ti) => texs[ti] || null, (id) => geoOn(i, id));
     if (!cur.framed) { V.frame(box); cur.framed = true; }
     const src = sourceFor(cur.modelLC, sides[i]);
     msgs[i].textContent = `${basename(cur.modelLC)} · ${src ? "from " + src.name : "game file"}${x.mixed ? " + mixed hair" : ""} · ${x.model.pos.length / 3} vertices`;
@@ -1504,6 +1559,43 @@ function conflictsOf(s) {
   }
   return { shared, wins, loses };
 }
+// ---------------------------------------------------------------- saved load orders (plans)
+// profile.loadOrders[name] = { sources, picks, remap, hair, saved } — switch between plans without building or touching Arctium
+function loadOrderSaves() {
+  const all = (S.profile.loadOrders ||= {}), names = Object.keys(all).sort((a, b) => a.localeCompare(b));
+  const sel = el("select", { style: "min-width:220px" });
+  sel.append(el("option", { value: "" }, names.length ? "(choose a saved load order)" : "(none saved yet)"));
+  for (const n of names) sel.append(el("option", { value: n, selected: n === S.profile.currentLoadOrder }, `${n}  ·  ${all[n].sources.filter((x) => x.enabled).length} on  ·  ${(all[n].saved || "").slice(0, 16).replace("T", " ")}`));
+  const snap = () => {
+    const P = S.profile, copy = (o) => JSON.parse(JSON.stringify(o || {}));
+    return { sources: S.sources.map((x) => ({ path: x.key, enabled: x.enabled })), picks: copy(P.picks), remap: copy(P.remap), hair: copy(P.hair), saved: new Date().toISOString() };
+  };
+  const save = el("button", { onclick: async () => {
+    const n = (prompt("Name for this load order (same name = overwrite):", S.profile.currentLoadOrder || "Plan 1") || "").trim();
+    if (!n) return;
+    all[n] = snap(); S.profile.currentLoadOrder = n;
+    await saveProfile(); renderOrderPage(); status(`Saved load order "${n}"`);
+  } }, "Save current as...");
+  const load = el("button", { onclick: async () => {
+    const n = sel.value; if (!n) return;
+    if (!confirm(`Switch to "${n}"? Your current order, on/off states, picks, swaps and hair choices are replaced (save them first if you want to keep them).`)) return;
+    const L = JSON.parse(JSON.stringify(all[n]));
+    Object.assign(S.profile, { sources: L.sources, picks: L.picks || {}, remap: L.remap || {}, hair: L.hair || {}, currentLoadOrder: n });
+    busy("Loading " + n + "...");
+    try { await scanSources(); await saveProfile(); await loadMappings(); } finally { busy(null); }
+    S.gearCache = null; S.gearItems = null; mixCache = null;
+    renderOrderPage(); renderModelList(); if (cur.entry) refresh();
+    status(`Loaded "${n}" · ${S.sources.filter((x) => x.enabled).length} mod folders on · press Build to apply it`);
+  } }, "Load");
+  const del = el("button", { onclick: async () => {
+    const n = sel.value; if (!n || !confirm(`Delete saved load order "${n}"?`)) return;
+    delete all[n]; if (S.profile.currentLoadOrder === n) delete S.profile.currentLoadOrder;
+    await saveProfile(); renderOrderPage();
+  } }, "Delete");
+  return el("div", { class: "card" }, el("h2", {}, "Saved load orders"),
+    el("p", { class: "note" }, "Keep several plans and switch between them. A saved load order holds the order, which folders are on, per-file picks, texture swaps and hair choices. Nothing changes in the game until you press Build."),
+    el("div", { class: "row" }, sel, load, save, del));
+}
 function renderOrderPage() {
   const P = $("#oPage"); P.innerHTML = "";
   const intro = el("div", { class: "card" }, el("h2", {}, "How this works"),
@@ -1533,6 +1625,7 @@ function renderOrderPage() {
     );
     tbl.append(tr);
   });
+  P.append(loadOrderSaves());
   P.append(el("div", { class: "card" }, el("h2", {}, "Load order"), tbl));
   if (S.orderSel) P.append(conflictCard(S.orderSel));
 

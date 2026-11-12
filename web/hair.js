@@ -102,6 +102,7 @@ export function mixHair(target, donors) {
   const newVerts = []; // Uint8Array(48) each, become global ids maxUsed+1+k
   const tHair = TS.batches.filter((b) => { const s = subInfo(TS.subs[DV(b).getUint16(4, true)]); return s.id > 0 && s.id < 100; });
   for (const don of donors) {
+    const from = don.from ?? don.id; // donor hairstyle, put into the body's hairstyle slot don.id
     const D = readM2(don.m2), DS = readSkin(don.skin);
     if (!target.bones || !target.bones.length) throw new Error("the body model's skeleton could not be read");
     if (!don.bones || !don.bones.length) throw new Error("the donor model's skeleton could not be read");
@@ -114,7 +115,7 @@ export function mixHair(target, donors) {
     let added = 0;
     DS.subs.forEach((dr, di) => {
       const ds = subInfo(dr);
-      if (ds.id !== don.id || !ds.indexCount) return;
+      if (ds.id !== from || !ds.indexCount) return;
       const localOf = new Map(); // donor skin vertex -> new skin vertex
       const sliceOf = new Map(), slice = [];
       const tri = [];
@@ -151,6 +152,7 @@ export function mixHair(target, donors) {
       if (comboStart > 65535) throw new Error("bone table too large");
       const iStart = TS.tri.length; TS.tri.push(...tri);
       const r = dr.slice(), d = DV(r);
+      d.setUint16(0, don.id, true);
       d.setUint16(2, iStart >>> 16, true);
       d.setUint16(4, vStart, true); d.setUint16(6, TS.vmap.length - vStart, true);
       d.setUint16(8, iStart & 0xffff, true); d.setUint16(10, tri.length, true);
@@ -172,8 +174,8 @@ export function mixHair(target, donors) {
       }
       added += tri.length / 3;
     });
-    if (!added) throw new Error("the donor model has no hairstyle " + don.id);
-    notes.push(`hairstyle ${don.id}: ${added} triangles, ${matched}/${don.bones.length} donor bones matched by name` + (off.some((x) => Math.abs(x) > 1e-4) ? `, moved ${off.map((x) => x.toFixed(2)).join("/")} to fit the head` : ""));
+    if (!added) throw new Error("the donor model has no hairstyle " + from);
+    notes.push(`hairstyle ${don.id}${from !== don.id ? " (from its style " + from + ")" : ""}: ${added} triangles, ${matched}/${don.bones.length} donor bones matched by name` + (off.some((x) => Math.abs(x) > 1e-4) ? `, moved ${off.map((x) => x.toFixed(2)).join("/")} to fit the head` : ""));
   }
   return { m2: writeM2(T, maxUsed, newVerts), skin: writeSkin(TS), notes };
 }
