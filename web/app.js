@@ -418,7 +418,7 @@ async function useViewInBuild() {
   const src = (v) => (v === "game" ? "@game" : v === "build" ? undefined : S.sources.find((x) => x.key === v));
   const { mdl, texPrefix, lcs } = cur.viewFiles;
   const texFiles = new Set(lcs.filter(isTexLC));
-  if (texPrefix) for (const x of S.sources) for (const lc of x.files.keys()) if (isTexLC(lc) && lc.startsWith(texPrefix + "/")) texFiles.add(lc);
+  if (texPrefix) for (const x of S.sources) for (const lc of x.files.keys()) if (isTexLC(lc) && [].concat(texPrefix).some((p) => lc.startsWith(p + "/"))) texFiles.add(lc);
   const ms = src(m), ts = src(t);
   if (ms === undefined && ts === undefined) { status("The left view already shows your build."); return; }
   let n = 0;
@@ -444,10 +444,11 @@ function modeFromSelect(sel) {
 }
 // Model dropdown: mods that ship the model files. Skin dropdown: mods that ship textures for this model.
 function fillSourceSelects(lcs, texPrefix) {
+  const prefixes = texPrefix ? [].concat(texPrefix) : null;
   const mdl = lcs.filter((lc) => !isTexLC(lc));
   const modelSrc = sourcesTouching(mdl);
   const texSrc = S.sources.filter((s) => {
-    for (const lc of s.files.keys()) if (isTexLC(lc) && (texPrefix ? lc.startsWith(texPrefix + "/") : lcs.includes(lc))) return true;
+    for (const lc of s.files.keys()) if (isTexLC(lc) && (prefixes ? prefixes.some((x) => lc.startsWith(x + "/")) : lcs.includes(lc))) return true;
     return false;
   });
   const hasModel = mdl.some((lc) => lc.endsWith(".m2"));
@@ -474,6 +475,10 @@ function fillSourceSelects(lcs, texPrefix) {
 
 // ---------------------------------------------------------------- model list
 const CUSTOM_RACES = { 7478494: "skyborne female" };
+// races whose in-game body is a creature-path model but whose mods also ship the blood elf files: shown as one entry
+const RACE_MERGE = { 7478494: "character/bloodelf/female" };
+const entryDirs = (e) => e.dirs || [e.dir];
+function entryFiles(e) { const set = new Set(); for (const d of entryDirs(e)) for (const x of dirFiles(d)) set.add(x); return set; }
 function modelEntries() {
   const onlyModded = $("#mOnlyModded").checked;
   const entries = new Map(); // key -> {key, group, label, dir, models:Set}
@@ -511,6 +516,15 @@ function modelEntries() {
   for (const e of entries.values()) {
     if (!e.models.size) for (const p of S.dirIndex.get(e.dir) || []) if (p.endsWith(".m2")) e.models.add(p);
   }
+  for (const [fid, other] of Object.entries(RACE_MERGE)) {
+    const p = S.pathById.get(+fid); if (!p) continue;
+    const a = entries.get("Playable characters|" + dirname(p)), b = entries.get("Playable characters|" + other);
+    if (!a || !b) continue;
+    a.dirs = [a.dir, b.dir]; a.primary = p; a.label += " (blood elf)";
+    for (const m of b.models) a.models.add(m);
+    a.modded ||= b.modded;
+    entries.delete(b.key);
+  }
   let list = [...entries.values()];
   if (onlyModded) list = list.filter((e) => e.modded);
   return list;
@@ -525,7 +539,7 @@ function renderModelList() {
     if (!items.length) continue;
     box.append(el("div", { class: "grp" }, `${g} (${items.length})`));
     for (const e of items) {
-      const n = sourcesTouching([...dirFiles(e.dir)]).length;
+      const n = sourcesTouching([...entryFiles(e)]).length;
       const it = el("div", { class: "it" + (cur.entry && cur.entry.key === e.key ? " on" : ""), onclick: () => { cur.keepSel = false; selectEntry(e); renderModelList(); } },
         e.label, e.modded ? el("small", {}, n + (n === 1 ? " mod" : " mods")) : el("small", {}, "vanilla"));
       box.append(it);
@@ -544,7 +558,7 @@ function dirFiles(dir) {
 
 async function selectEntry(e) {
   cur.entry = e; cur.framed = false; cur.slots = {}; cur.geo = null; cur.inited = false; cur.texLC = null;
-  const models = [...e.models].sort((a, b) => (b.includes("_hd") - a.includes("_hd")) || a.localeCompare(b));
+  const models = [...e.models].sort((a, b) => (b === e.primary) - (a === e.primary) || (b.includes("_hd") - a.includes("_hd")) || a.localeCompare(b));
   cur.modelLC = models[0] || null;
   cur.char = /^character\//.test(e.dir) ? parseCharDir(e.dir, cur.modelLC) : null;
   cur.variations = []; cur.variation = null;
@@ -557,7 +571,7 @@ async function selectEntry(e) {
   } catch (err) { console.warn(err); }
   busy(null);
   if (!cur.char) cur.overlays = [];
-  fillSourceSelects([...dirFiles(e.dir)], cur.char ? e.dir : null);
+  fillSourceSelects([...entryFiles(e)], cur.char ? entryDirs(e) : null);
   await refresh(true);
 }
 function parseCharDir(dir, modelLC) {
@@ -702,7 +716,7 @@ function imgToCanvas(img) {
   return c;
 }
 async function composeBody(mode) {
-  const ch = cur.char, dir = cur.entry.dir, sfx = ch.hd ? "_hd" : "";
+  const ch = cur.char, dir = dirname(cur.modelLC), sfx = ch.hd ? "_hd" : "";
   const race = basename(dir.replace(/\/(male|female)$/, "")), sex = ch.sex;
   const pre = `${dir}/${race}${sex}`;
   const skinLC = `${pre}skin00_${cur.slots.skin}${sfx}.blp`;
@@ -880,7 +894,7 @@ async function refresh(first = false) {
   if (seq !== refreshSeq) return;
   const ok = loaded.filter((x) => !x.error);
   if (!cur.inited && ok.length) {
-    cur.slots = defaultSlots(ok[0].model, cur.entry.dir);
+    cur.slots = defaultSlots(ok[0].model, dirname(cur.modelLC));
     const ids = new Set(); for (const x of ok) for (const sm of x.skin.submeshes) ids.add(sm.id);
     cur.geo = defaultGeo({ submeshes: [...ids].map((id) => ({ id })) });
     cur.hairBase = [...cur.geo.on].find(isHairId) ?? null;
@@ -969,9 +983,13 @@ function renderProps(model, skin) {
   const P = $("#mProps"); P.innerHTML = "";
   gearItemPanel(P);
   const e = cur.entry; if (!e) return;
-  P.append(el("div", { style: "font-weight:600;font-size:14px" }, e.label), el("div", { class: "note" }, e.dir));
+  P.append(el("div", { style: "font-weight:600;font-size:14px" }, e.label), el("div", { class: "note" }, entryDirs(e).join(" + ")));
   if (e.models.size > 1) {
-    const sel = el("select", { onchange: () => { cur.modelLC = sel.value; cur.framed = false; cur.geo = null; cur.inited = false; refresh(true); } });
+    const sel = el("select", { onchange: () => {
+      cur.modelLC = sel.value; cur.framed = false; cur.geo = null; cur.inited = false; cur.cm = null;
+      const d = dirname(cur.modelLC); if (/^character\//.test(d)) cur.char = parseCharDir(d, cur.modelLC) || cur.char;
+      refresh(true);
+    } });
     for (const m of [...e.models].sort()) sel.append(el("option", { value: m, selected: m === cur.modelLC }, basename(m)));
     P.append(el("h3", {}, "Model"), sel);
   }
@@ -988,7 +1006,7 @@ function renderProps(model, skin) {
       P.append(el("label", {}, el("input", { type: "checkbox", checked: cur.slots.underwear !== false, onchange: (ev) => { cur.slots.underwear = ev.target.checked; refresh(); } }), "Underwear"));
     }
     if (cur.char) {
-      const o = charOptions(e.dir, cur.char.hd);
+      const o = charOptions(dirname(cur.modelLC), cur.char.hd);
       const mk = (label, key, opts, fmt = (x) => x) => {
         const s = el("select", { onchange: () => { cur.slots[key] = s.value || null; refresh(); } });
         if (key !== "skin") s.append(el("option", { value: "" }, "(none)"));
@@ -1013,7 +1031,7 @@ function renderProps(model, skin) {
       for (const v of cur.variations) vs.append(el("option", { value: v.key, selected: cur.variation === v.key }, v.paths.filter(Boolean).map(basename).join(" + ") + `  (${v.displays.length} NPC look${v.displays.length > 1 ? "s" : ""})`));
       P.append(el("label", {}, el("span", { style: "width:90px" }, "Variation"), vs));
     }
-    const files = texCandidates(e.dir);
+    const files = texCandidates(dirname(cur.modelLC));
     const types = [...new Set(model.textures.map((t) => t.type))].filter((t) => t !== 0 && !(cur.char && (t === 1 || t === 6 || (t >= 15 && t <= 18))));
     for (const t of types) {
       const s = el("select", { onchange: () => { cur.slots[t] = s.value || null; refresh(); } });
@@ -1030,7 +1048,7 @@ function renderProps(model, skin) {
     P.append(box);
   }
   // files in this folder and who provides them
-  const all = [...dirFiles(e.dir)].filter((lc) => sourcesTouching([lc]).length);
+  const all = [...entryFiles(e)].filter((lc) => sourcesTouching([lc]).length);
   if (all.length) {
     P.append(el("h3", {}, `Modded files here (${all.length})`));
     const touching = sourcesTouching(all);
