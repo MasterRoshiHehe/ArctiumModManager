@@ -491,7 +491,8 @@ function modelEntries() {
   // custom playable races whose body is stored as a creature model (e.g. Skyborne = models/creature/unk_exp00_7478494)
   if (CHR) for (const fid of CHR.byModelFid.keys()) {
     const p = S.pathById.get(fid);
-    if (!p || p.startsWith("character/") || !S.casc.has(fid)) continue;
+    // ChrModel also covers customizable pets and forms (felguard, imp, druid forms): those stay creatures
+    if (!p || p.startsWith("character/") || p.startsWith("creature/") || !S.casc.has(fid)) continue;
     add("Playable characters", dirname(p), CUSTOM_RACES[fid] || "custom race " + basename(p).replace(/\.m2$/, ""), p);
   }
   // everything any mod touches
