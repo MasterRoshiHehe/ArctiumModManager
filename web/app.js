@@ -343,7 +343,7 @@ function fillSourceSelects(lcs, texPrefix) {
     tsel.append(el("option", { value: "build" }, "Skins: your build"));
     tsel.append(el("option", { value: "game" }, "Skins: original game"));
     for (const s of texSrc) tsel.append(el("option", { value: s.key }, "Skins: " + s.name + (s.enabled ? "" : " (off)")));
-    tsel.style.display = hasModel ? "" : "none";
+    tsel.style.display = hasModel && id === "#srcA" ? "" : "none"; // skins are picked for the left view only; the right stays a plain comparison
     sel.value = [...sel.options].some((o) => o.value === prev) && cur.keepSel ? prev : def;
     tsel.value = [...tsel.options].some((o) => o.value === tprev) && cur.keepSel ? tprev : "same";
   }
