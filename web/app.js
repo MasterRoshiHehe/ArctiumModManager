@@ -606,6 +606,14 @@ function geoOn(side, id) {
   if (side === 1 && isHairId(id) && cur.hairBase != null && cur.geo.ids.includes(cur.hairBase)) return id === cur.hairBase;
   return cur.geo.on.has(id);
 }
+// gear textures: the game view shows the game's, a picked version shows that one; otherwise a body mod shows its own
+// gear files if it has them and your build's for the rest
+function gearMode(o, mode) {
+  const t = texMode(mode);
+  if (t === "game") return "game";
+  if (o.src) return o.src;
+  return t && t.files && !t.files.has(o.lc) ? "build" : t;
+}
 async function composeChr(type, mode) {
   const res = CHR.resolve(cur.cm, cur.custom);
   const skinOpt = CHR.options(cur.cm).find((o) => /skin/i.test(o.name))?.id;
@@ -615,7 +623,7 @@ async function composeChr(type, mode) {
     after: type !== 1 ? null : async (g, rect) => {
       const order = [5, 6, 7, 3, 4, 0, 1, 2];
       for (const sec of order) for (const o of cur.overlays.filter((x) => x.section === sec)) {
-        const m = texMode(mode) === "game" ? "game" : o.src ? o.src : texMode(mode);
+        const m = gearMode(o, mode);
         const r = rect(sec); if (!r) continue;
         try { g.drawImage(imgToCanvas(await imgLC(o.lc, m)), r[0], r[1], r[2], r[3]); } catch {}
       }
@@ -753,7 +761,7 @@ async function composeBody(mode) {
   if (cur.slots.underwear) { await draw(`${pre}nakedpelvisskin00_${cur.slots.skin}${sfx}.blp`, 5); await draw(`${pre}nakedtorsoskin00_${cur.slots.skin}${sfx}.blp`, 3); }
   const order = [5, 6, 7, 3, 4, 0, 1, 2]; // legs, feet, chest, arms, hands
   for (const sec of order) for (const o of cur.overlays.filter((x) => x.section === sec)) {
-    const m = texMode(mode) === "game" ? "game" : o.src ? o.src : texMode(mode);
+    const m = gearMode(o, mode);
     await draw(o.lc, sec, m);
   }
   return canvasTexture(c);
