@@ -751,11 +751,11 @@ async function loadSide(mode, side = 0) {
   let skinB;
   try { skinB = model.skinFids[0] ? await readFid(model.skinFids[0], mode) : await readLC(cur.modelLC.replace(/\.m2$/, "00.skin"), mode); }
   catch { skinB = await readLC(cur.modelLC.replace(/\.m2$/, "00.skin"), mode); }
-  const mm = modelMode(mode);
-  if (side === 0 && mm === "build" && Object.keys(hairCfg(cur.modelLC)).length) {
-    try { const r = await mixedFor(cur.modelLC, m2b, skinB); cur.hairNotes = r.notes; cur.hairErr = null; return { model: parseM2(r.m2), skin: parseSkin(r.skin), mixed: true }; }
+  // hair replacements show on the left view, on whichever body it shows (your build, a mod, or the game)
+  if (side === 0 && Object.keys(hairCfg(cur.modelLC)).length) {
+    try { const r = await mixedFor(cur.modelLC, m2b, skinB, modelMode(mode)); cur.hairNotes = r.notes; cur.hairErr = null; return { model: parseM2(r.m2), skin: parseSkin(r.skin), mixed: true }; }
     catch (e) { cur.hairErr = e.message; cur.hairNotes = null; }
-  } else if (side === 0 && mm === "build") { cur.hairErr = null; cur.hairNotes = null; }
+  } else if (side === 0) { cur.hairErr = null; cur.hairNotes = null; }
   return { model, skin: parseSkin(skinB) };
 }
 // --- hair mixer: profile.hair[modelLc] = { styleId: { src: sourceKey | "@game", fit } }
@@ -788,14 +788,14 @@ function donorData(lc, key) {
   return donorCache.get(k);
 }
 let mixCache = null;
-function mixedFor(lc, m2b, skinB) {
+function mixedFor(lc, m2b, skinB, mode = "build") {
   const cfg = hairCfg(lc);
-  const sig = lc + "|" + JSON.stringify(cfg) + "|" + m2b.length + "|" + skinB.length + "|" + (sourceFor(lc, "build")?.key || "game");
+  const sig = lc + "|" + JSON.stringify(cfg) + "|" + m2b.length + "|" + skinB.length + "|" + (sourceFor(lc, mode)?.key || "game");
   if (mixCache && mixCache.sig === sig) return mixCache.p;
   const p = (async () => {
     const donors = [];
     for (const [id, c] of Object.entries(cfg)) { const d = await donorData(lc, c.src); donors.push({ id: +id, from: c.from != null ? +c.from : +id, m2: d.m2, skin: d.skin, bones: d.bones, fit: c.fit !== false }); }
-    return mixHair({ m2: m2b, skin: skinB, bones: await bonesFor(m2b, "build") }, donors);
+    return mixHair({ m2: m2b, skin: skinB, bones: await bonesFor(m2b, mode) }, donors);
   })();
   mixCache = { sig, p }; p.catch(() => { if (mixCache && mixCache.sig === sig) mixCache = null; });
   return p;
@@ -854,7 +854,7 @@ function hairPanel(P) {
   const n = Object.keys(cfg).length;
   P.append(el("h3", {}, `Hairstyles${n ? ` (${n} replaced)` : ""}`), el("div", { class: "note" },
     `One row per hairstyle your character can pick in game. "Keep as is" leaves it alone. To replace one, choose a mod (or the original game) and which of its hairstyles to use instead, ` +
-    `e.g. row "Style 2" ← Mod A, "Style 7". Click a row's name to show that hairstyle on the left view (set the left view to "Your build" to see replacements). The right view never changes. Build puts it in game.`));
+    `e.g. row "Style 2" ← Mod A, "Style 7". Click a row's name to show that hairstyle on the left view. Replacements show on the left view whatever body it shows; the right view never changes. Build puts them on your build's body in game.`));
   if (cur.hairErr) P.append(el("div", { class: "note", style: "color:#f88" }, "Could not mix: " + cur.hairErr));
   else if (cur.hairNotes) P.append(el("div", { class: "note" }, cur.hairNotes.join(" · ")));
   for (const id of [...ids].sort((a, b) => names.has(b) - names.has(a) || a - b)) P.append(row(id));
