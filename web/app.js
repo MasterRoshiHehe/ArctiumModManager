@@ -1864,6 +1864,8 @@ async function checkMappings(out, files) {
   let n = 0;
   for (const [lc, src] of models) {
     if (out && ++n % 10 === 0) out.textContent = `Checking models... ${n}/${models.length}`;
+    // a model your WoW version doesn't have is never shown, so its textures don't matter
+    { const mf = S.idByPath.get(lc); if (mf !== undefined && !S.casc.has(mf)) continue; }
     let txid = [];
     try {
       const abs = winJoin(src.abs, src.files.get(lc).rel);
