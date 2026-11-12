@@ -29,7 +29,8 @@ static class App
 {
     const string Name = "Arctium Mod Manager";
     static string AppDir, SettingsFile, OutputDir, BackupDir, ConfigFile, FileMapping, LogFile;
-    static string WowRoot = "", Product = "", ModsRoot = "", ArctiumState = "";
+    static string WowRoot = "", Product = "", ModsRoot = "", ArctiumState = "", OutputSetting = "";
+    const string OutputMarker = ".arctium-mod-manager-output";
     static readonly char Sep = Path.DirectorySeparatorChar;
     static volatile bool running = true;
     static HttpListener listener;
@@ -86,9 +87,11 @@ static class App
             }
             catch { }
         }
-        OutputDir = Path.Combine(AppDir, "Output");
+        OutputDir = OutputSetting != "" ? OutputSetting : Path.Combine(AppDir, "Output");
         BackupDir = Path.Combine(AppDir, "backups");
-        Directory.CreateDirectory(OutputDir); Directory.CreateDirectory(BackupDir);
+        try { Directory.CreateDirectory(OutputDir); } catch { OutputSetting = ""; OutputDir = Path.Combine(AppDir, "Output"); Directory.CreateDirectory(OutputDir); }
+        Directory.CreateDirectory(BackupDir);
+        try { File.WriteAllText(Path.Combine(OutputDir, OutputMarker), "Build output of Arctium Mod Manager. Everything in this folder is replaced on each build.\r\n"); } catch { }
 
         int port = 0;
         for (int p = 8765; p < 8785; p++)
@@ -220,7 +223,7 @@ static class App
             try { s = Json.Deserialize<Dictionary<string, object>>(File.ReadAllText(SettingsFile)); } catch { s = null; }
         }
         Func<string, string> get = k => s != null && s.ContainsKey(k) && s[k] != null ? s[k].ToString() : "";
-        WowRoot = get("WowRoot"); Product = get("Product"); ModsRoot = get("ModsRoot"); ArctiumState = get("ArctiumState");
+        WowRoot = get("WowRoot"); Product = get("Product"); ModsRoot = get("ModsRoot"); ArctiumState = get("ArctiumState"); OutputSetting = get("OutputDir");
         if (!setup && WowRoot != "" && ModsRoot != "" && ArctiumState != "") { if (Product == "") Product = "_retail_"; return true; }
         return ShowSetup(true);
     }
@@ -292,7 +295,7 @@ static class App
     static void SaveSettings()
     {
         var o2 = new Dictionary<string, object>();
-        o2["WowRoot"] = WowRoot; o2["Product"] = Product; o2["ModsRoot"] = ModsRoot; o2["ArctiumState"] = ArctiumState;
+        o2["WowRoot"] = WowRoot; o2["Product"] = Product; o2["ModsRoot"] = ModsRoot; o2["ArctiumState"] = ArctiumState; o2["OutputDir"] = OutputSetting;
         File.WriteAllText(SettingsFile, Json.Serialize(o2), new UTF8Encoding(false));
     }
 
@@ -307,7 +310,26 @@ static class App
         if (!File.Exists(Path.Combine(a, @"config\appsettings.Mods.json"))) return "The Arctium folder must contain config\\appsettings.Mods.json.";
         if (pr == "") { string[] ps = Products(w); pr = ps.Contains(Product) ? Product : ps.Contains("_forever_") ? "_forever_" : ps.Length > 0 ? ps[0] : "_retail_"; }
         if (!Directory.Exists(Path.Combine(w, pr))) return "There is no " + pr + " folder in the World of Warcraft folder.";
+        // build output folder: the build deletes anything in it that isn't part of the build, so only an empty folder or an earlier output is allowed
+        string od = get("outputDir"), odN = null;
+        if (od != "")
+        {
+            try { odN = Norm(od); } catch { return "The output folder path isn't valid."; }
+            if (odN.Length <= 3) return "The output folder can't be a whole drive.";
+            foreach (string bad in new[] { w, m, AppDir }) { string b = Norm(bad); if (odN.Equals(b, StringComparison.OrdinalIgnoreCase) || b.StartsWith(odN + Sep, StringComparison.OrdinalIgnoreCase)) return "The output folder can't be (or contain) the game, mods or program folder."; }
+            if (Under(odN, new[] { Norm(w), Norm(m) })) return "The output folder can't be inside the game or mods folder.";
+            if (Directory.Exists(odN) && !File.Exists(Path.Combine(odN, OutputMarker)) && Directory.EnumerateFileSystemEntries(odN).Any())
+                return "Pick an empty folder for the output: every build replaces everything in it.";
+            if (odN.Equals(Norm(Path.Combine(AppDir, "Output")), StringComparison.OrdinalIgnoreCase)) odN = null;
+        }
         WowRoot = w; ModsRoot = m; Product = pr;
+        string newOut = odN ?? Path.Combine(AppDir, "Output");
+        if (!Norm(newOut).Equals(Norm(OutputDir), StringComparison.OrdinalIgnoreCase))
+        {
+            try { Directory.CreateDirectory(newOut); File.WriteAllText(Path.Combine(newOut, OutputMarker), "Build output of Arctium Mod Manager. Everything in this folder is replaced on each build.\r\n"); }
+            catch (Exception e) { return "Couldn't create the output folder: " + e.Message; }
+            OutputDir = newOut; OutputSetting = odN ?? "";
+        }
         if (!a.Equals(ArctiumState, StringComparison.OrdinalIgnoreCase))
         {
             ArctiumState = a;
@@ -690,6 +712,7 @@ static class App
                 }
                 catch (Exception e) { errors.Add(rel + " : " + e.Message); }
             }
+            want.Add(Norm(Path.Combine(OutputDir, OutputMarker)));
             foreach (string x in Directory.EnumerateFiles(OutputDir, "*", SearchOption.AllDirectories).ToList())
                 if (!want.Contains(Norm(x))) { try { File.Delete(x); removed++; } catch (Exception e) { errors.Add(x + " : " + e.Message); } }
             foreach (string d in Directory.EnumerateDirectories(OutputDir, "*", SearchOption.AllDirectories).OrderByDescending(d => d.Length).ToList())

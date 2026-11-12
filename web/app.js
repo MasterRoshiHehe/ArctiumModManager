@@ -1950,12 +1950,13 @@ async function openFolders() {
   const w = row("World of Warcraft folder (the one that holds the Data folder)", info.wowRoot, "World of Warcraft folder", (r) => fillProducts(r, prod.value));
   const m = row("Mods folder (holds your Arctium mod folders, any depth)", info.modsRoot, "Mods folder");
   const a = row("Arctium app data folder (LocalState, holds a config folder)", (info.configFile || "").replace(/\\config\\[^\\]+$/i, ""), "Arctium app data folder");
+  const o = row("Build output folder (point Arctium's mod folder here; must be empty or an earlier output, everything in it is replaced on each build)", info.outputDir, "Build output folder");
   w.inp.onchange = () => fillProducts(w.inp.value, prod.value);
   await fillProducts(info.wowRoot || "", info.product);
   const save = el("button", { onclick: async () => {
     err.textContent = "Saving...";
     try {
-      const r = await fetch("/api/settings", { method: "POST", body: JSON.stringify({ wowRoot: w.inp.value, modsRoot: m.inp.value, arctiumState: a.inp.value, product: prod.value }) });
+      const r = await fetch("/api/settings", { method: "POST", body: JSON.stringify({ wowRoot: w.inp.value, modsRoot: m.inp.value, arctiumState: a.inp.value, product: prod.value, outputDir: o.inp.value }) });
       const t = await r.text();
       if (!r.ok) { err.textContent = t || "Couldn't save."; return; }
       err.textContent = "Saved. Reloading..."; setTimeout(() => location.reload(), 300);
@@ -1964,7 +1965,7 @@ async function openFolders() {
   dlg = el("div", { id: "fdlg", class: "on", onclick: (ev) => { if (ev.target === dlg) dlg.remove(); } },
     el("div", { class: "box" },
       el("div", { style: "font-weight:600;font-size:15px" }, "Folders"),
-      w.node, el("div", { class: "row" }, el("span", { class: "note" }, "Game version"), prod), m.node, a.node, err,
+      w.node, el("div", { class: "row" }, el("span", { class: "note" }, "Game version"), prod), m.node, a.node, o.node, err,
       el("div", { class: "row", style: "justify-content:flex-end" }, el("button", { onclick: () => dlg.remove() }, "Cancel"), save)));
   document.body.append(dlg);
 }
