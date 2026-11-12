@@ -1,7 +1,7 @@
 // Hair mixer: copy one hairstyle (skin section id 1-99) from a donor model into a body model.
 // The donor's vertices are added to the body, their bones matched by name (CRC) or key-bone id,
 // and moved so the donor's head bone sits on the body's head bone. The body's own copy of that
-// hairstyle is emptied. Only new files are produced; the inputs are never changed.
+// hairstyle is removed so its room is reused. Only new files are produced; the inputs are never changed.
 
 const DV = (u) => new DataView(u.buffer, u.byteOffset, u.byteLength);
 const pad16 = (n) => (n + 15) & ~15;
@@ -98,25 +98,79 @@ const headPivot = (bones) => bones.find((b) => b.key === 6)?.pivot;
 // returns { m2, skin, notes }
 export function mixHair(target, donors) {
   const T = readM2(target.m2), TS = readSkin(target.skin), notes = [];
+  T.verts = T.verts.slice(); // freed vertex ids get overwritten in place
+  if (!target.bones || !target.bones.length) throw new Error("the body model's skeleton could not be read");
   let maxUsed = 0; for (const v of TS.vmap) if (v > maxUsed) maxUsed = v;
   const newVerts = []; // Uint8Array(48) each, become global ids maxUsed+1+k
   const tHair = TS.batches.filter((b) => { const s = subInfo(TS.subs[DV(b).getUint16(4, true)]); return s.id > 0 && s.id < 100; });
+  // how many vertices each donor hairstyle needs
+  const prep = [];
   for (const don of donors) {
     const from = don.from ?? don.id; // donor hairstyle, put into the body's hairstyle slot don.id
     const D = readM2(don.m2), DS = readSkin(don.skin);
-    if (!target.bones || !target.bones.length) throw new Error("the body model's skeleton could not be read");
+    let need = 0;
+    for (const dr of DS.subs) { const ds = subInfo(dr); if (ds.id !== from || !ds.indexCount) continue; const u = new Set(); for (let k = 0; k < ds.indexCount; k++) u.add(DS.tri[ds.indexStart + k]); need += u.size; }
+    if (!need) { notes.push(`hairstyle ${don.id}: skipped, that model has no hairstyle ${from}`); continue; }
+    prep.push({ don, from, D, DS, need });
+  }
+  // the replaced hairstyles' own vertices are removed, so a swap only costs the size difference
+  const len = TS.vmap.length;
+  const subRefs = TS.subs.map((r) => ({ i: subInfo(r), vs: DV(r).getUint16(4, true), vc: DV(r).getUint16(6, true) }));
+  const plan = (slots) => {
+    const keep = new Uint8Array(len), gone = new Uint8Array(len);
+    for (const { i, vs, vc } of subRefs) {
+      const m = slots.has(i.id) ? gone : keep;
+      for (let k = 0; k < i.indexCount; k++) m[TS.tri[i.indexStart + k]] = 1;
+      for (let v = vs; v < vs + vc && v < len; v++) m[v] = 1;
+    }
+    const drop = new Uint8Array(len), used = new Uint8Array(maxUsed + 1);
+    let kept = 0;
+    for (let v = 0; v < len; v++) { if (gone[v] && !keep[v]) drop[v] = 1; else { kept++; used[TS.vmap[v]] = 1; } }
+    const free = []; for (let g = 0; g <= maxUsed; g++) if (!used[g]) free.push(g);
+    return { drop, kept, free };
+  };
+  let acc = prep, P;
+  for (;;) {
+    P = plan(new Set(acc.map((p) => p.don.id)));
+    let sk = 65535 - P.kept, gl = P.free.length + 65535 - maxUsed;
+    const next = acc.filter((p) => { if (p.need > sk || p.need > gl) return false; sk -= p.need; gl -= p.need; return true; });
+    if (next.length === acc.length) break;
+    acc = next;
+  }
+  for (const p of prep) if (!acc.includes(p)) notes.push(`hairstyle ${p.don.id}: skipped, the model is full (too many vertices); replace fewer hairstyles or pick smaller ones`);
+  const slots = new Set(acc.map((p) => p.don.id));
+  // compact the body's skin
+  {
+    const before = new Int32Array(len + 1), vmap = [], bones = [];
+    for (let v = 0; v < len; v++) { before[v + 1] = before[v] + (P.drop[v] ? 0 : 1); if (!P.drop[v]) { vmap.push(TS.vmap[v]); bones.push(TS.bones[v]); } }
+    const tri = [], seen = new Map();
+    TS.subs.forEach((r, si) => {
+      const { i, vs, vc } = subRefs[si], d = DV(r);
+      if (slots.has(i.id)) { for (const o of [2, 4, 6, 8, 10]) d.setUint16(o, 0, true); return; }
+      const key = i.indexStart + ":" + i.indexCount;
+      let st = seen.get(key);
+      if (st === undefined) { st = tri.length; for (let k = 0; k < i.indexCount; k++) tri.push(before[TS.tri[i.indexStart + k]]); seen.set(key, st); }
+      const a = before[Math.min(vs, len)], z = before[Math.min(vs + vc, len)];
+      d.setUint16(2, st >>> 16, true); d.setUint16(8, st & 0xffff, true);
+      d.setUint16(4, a, true); d.setUint16(6, z - a, true);
+    });
+    const freed = len - vmap.length;
+    TS.vmap = vmap; TS.bones = bones; TS.tri = tri;
+    if (freed) notes.push(`${freed} vertices freed from the replaced hairstyles`);
+  }
+  let freeAt = 0;
+  const place = (v) => {
+    if (freeAt < P.free.length) { const g = P.free[freeAt++]; T.verts.set(v, g * 48); return g; }
+    const g = maxUsed + 1 + newVerts.length;
+    if (g > 65535) throw new Error("the body model has too many vertices to add this hairstyle");
+    newVerts.push(v); return g;
+  };
+  for (const { don, from, D, DS } of acc) {
     if (!don.bones || !don.bones.length) throw new Error("the donor model's skeleton could not be read");
     const { map, matched } = boneMap(don.bones, target.bones);
     let off = [0, 0, 0];
     const th = headPivot(target.bones), dh = headPivot(don.bones);
     if (don.fit !== false && th && dh) off = [th[0] - dh[0], th[1] - dh[1], th[2] - dh[2]];
-    // room check first: a skin can address at most 65,535 vertices, so skip a hairstyle that doesn't fit instead of failing all
-    let need = 0;
-    for (const dr of DS.subs) { const ds = subInfo(dr); if (ds.id !== from || !ds.indexCount) continue; const u = new Set(); for (let k = 0; k < ds.indexCount; k++) u.add(DS.tri[ds.indexStart + k]); need += u.size; }
-    if (!need) { notes.push(`hairstyle ${don.id}: skipped, that model has no hairstyle ${from}`); continue; }
-    if (TS.vmap.length + need > 65535 || maxUsed + 1 + newVerts.length + need > 65535) { notes.push(`hairstyle ${don.id}: skipped, the model is full (too many vertices); replace fewer hairstyles`); continue; }
-    // empty the body's own copy
-    for (const r of TS.subs) { const i = subInfo(r); if (i.id === don.id) DV(r).setUint16(10, 0, true); }
     let added = 0;
     DS.subs.forEach((dr, di) => {
       const ds = subInfo(dr);
@@ -142,8 +196,7 @@ export function mixHair(target, donors) {
             sb[j] = sliceOf.get(tb);
           }
           nvx = TS.vmap.length;
-          TS.vmap.push(maxUsed + 1 + newVerts.length);
-          newVerts.push(v);
+          TS.vmap.push(place(v));
           TS.bones.push(sb);
           localOf.set(sv, nvx);
         }
@@ -152,7 +205,6 @@ export function mixHair(target, donors) {
       if (!slice.length) { slice.push(map[0] ?? 0); }
       if (slice.length > 256) throw new Error("hairstyle uses too many bones");
       if (TS.vmap.length > 65535) throw new Error("the combined model has too many vertices (over 65,535)");
-      if (maxUsed + 1 + newVerts.length > 65535) throw new Error("the body model has too many vertices to add this hairstyle");
       const comboStart = T.combos.length; T.combos.push(...slice);
       if (comboStart > 65535) throw new Error("bone table too large");
       const iStart = TS.tri.length; TS.tri.push(...tri);
