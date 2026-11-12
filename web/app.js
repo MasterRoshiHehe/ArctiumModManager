@@ -430,7 +430,7 @@ async function useViewInBuild() {
   const ms = src(m), ts = src(t);
   if (ms === undefined && ts === undefined) return;
   let n = 0;
-  const pick = (lc, s) => { if (s === undefined) return; if (s === "@game") { if (S.idByPath.has(lc)) { setPick(lc, "@game"); n++; } } else if (s.files.has(lc)) { setPick(lc, s.key); n++; } else if (S.profile.picks[lc] && !isTexLC(lc)) { setPick(lc, null); } };
+  const pick = (lc, s) => { if (s === undefined) return; if (s === "@game") { if (S.casc.has(S.idByPath.get(lc))) { setPick(lc, "@game"); n++; } else if (S.profile.picks[lc]) setPick(lc, null); } else if (s.files.has(lc)) { setPick(lc, s.key); n++; } else if (S.profile.picks[lc] && !isTexLC(lc)) { setPick(lc, null); } };
   for (const lc of mdl) pick(lc, ms);
   for (const lc of texFiles) pick(lc, ts);
   await saveProfile();
@@ -1827,7 +1827,10 @@ async function build(out) {
       if (src) { lines.push(`L\t${winJoin(src.abs, src.files.get(lc).rel)}\t${lc}`); continue; }
       // explicit "original game" pick: write the game file so it overrides any older copy
       if (S.profile.picks[lc] === "@game") {
-        const b = await S.casc.readFid(S.idByPath.get(lc));
+        // nothing to write when no mod ships the file (the game's own is used) or the game doesn't have it
+        const fid = S.idByPath.get(lc);
+        if (!S.sources.some((x) => x.enabled && x.files.has(lc)) || !S.casc.has(fid)) continue;
+        const b = await S.casc.readFid(fid);
         await api("/api/write", { p: winJoin(S.info.outputDir, lc) }, { method: "POST", body: b });
         lines.push(`K\t\t${lc}`); fromGame++;
       }
