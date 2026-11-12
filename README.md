@@ -2,7 +2,7 @@
 
 A local tool for Arctium model/texture mods (WoW). It previews modded models next to the original game models, lets you try on modded gear textures, mix hairstyles between versions of a body model, and builds your mod folders in a fixed load order into **one** Arctium mod folder plus **one** file-mapping file.
 
-It only reads your game folder and mod folders. It writes only inside its own folder (`Output\`, `profile.json`, a few `.txt` files). It listens on localhost only and never connects to the internet.
+It only reads your game folder and mod folders. It writes only inside its own folder (`profile.json`, a few `.txt` files) and the build output folder (default `Output\`, changeable under Folders; it must be empty or an earlier output, because every build replaces its contents). It listens on localhost only and never connects to the internet.
 
 By MasterRoshiHehe.
 
@@ -25,7 +25,7 @@ Put the folder on the **same drive as your mod folders**, so Build can use hard 
 1. Run `Arctium Mod Manager.exe`. On first start it reads the Arctium app's settings to find your game folder, mods folder and Arctium data, and shows them for you to confirm.
 2. A window opens with the tool (Edge or Chrome app window). A tray icon has Open / Change folders / Quit.
 3. **Load order & build**: set the order (top wins), press **Build my Arctium folder**.
-4. In the Arctium app, one time only: turn off your other mod folders, add `<this folder>\Output` as a mod folder, add `<this folder>\LoadOrder-mappings.txt` as a file mapping.
+4. In the Arctium app, one time only: turn off your other mod folders, add the output folder (default `<this folder>\Output`) as a mod folder, and the `LoadOrder-mappings.txt` inside it as a file mapping.
 5. Start the game through Arctium. After any change: Build again and restart the game.
 
 Bright green body/item in game = a texture with an unknown file ID. Build checks for this and reports it.

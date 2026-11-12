@@ -41,7 +41,7 @@ Three problems this tool solves:
 1. Start the tool. On first start it detects the folders from the Arctium app's own settings (section 3).
 2. It imports the Arctium app's current folder order and on/off states into `profile.json`.
 3. The user sets the order and picks, then presses **Build**.
-4. One time only, in the Arctium app: turn off the individual mod folders, add `<tool>\Output` as a mod folder, and add `<tool>\LoadOrder-mappings.txt` as a file mapping.
+4. One time only, in the Arctium app: turn off the individual mod folders, add the output folder (default `<tool>\Output`) as a mod folder, and add `LoadOrder-mappings.txt` from inside it as a file mapping.
 5. After every later change: Build again, then restart the game.
 
 ---
@@ -114,9 +114,9 @@ Why it is split this way: browsers can't read arbitrary disk paths or make hard 
 | `settings.json` | `{ "WowRoot", "Product", "ModsRoot", "ArctiumState" }` |
 | `profile.json` | `{ version:1, sources:[{path, enabled}] (ordered, top wins), picks:{ lcPath: sourceKey or "@game" }, remap:{ targetLc: {lc, src} }, hair:{ modelLc: { geosetId: {src, fit} } }, extraMappings:[paths], imported:true }` |
 | `extra-mappings.txt` | Mapping lines the tool worked out itself (guessed fixes). |
-| `LoadOrder-mappings.txt` | **Written by Build**: every mapping line needed by the current build. The user adds this one file in Arctium. |
+| `<output>\LoadOrder-mappings.txt` | **Written by Build** into the output folder (kept there by a `K` line): every mapping line needed by the current build. The user adds this one file in Arctium. |
 | `build-report.txt` | Optional. |
-| `Output\` | **Written by Build**: the merged mod folder. |
+| `Output\` | **Written by Build**: the merged mod folder. Its location is a setting (`OutputDir` in settings.json, set from the Folders dialog); a new location must be empty or hold the `.arctium-mod-manager-output` marker, since Build deletes everything it didn't write. |
 
 "lc" everywhere means lowercase forward-slash game path.
 
@@ -339,6 +339,7 @@ The UI shows hair choices as "Style N · Name" from `chr.hairNames(chrModelId)` 
 - Never write inside the user's mod folders. Only read.
 - Never write to Arctium's config. The user makes the one-time changes in the Arctium app.
 - Ask before deleting anything outside `Output\`.
+- Folder pickers use the Explorer-style IFileOpenDialog (FOS_PICKFOLDERS); the user hates the old tree FolderBrowserDialog, keep it only as a fallback.
 - Close the game before Build if Arctium locks files (it usually doesn't; hard links are fine).
 
 ---
