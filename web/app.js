@@ -897,7 +897,8 @@ async function sideTextures(model, mode) {
         texs.push(dataTexture(img, !!(tx.flags & 1), !!(tx.flags & 2)));
       } else if (cur.cm) {
         const key = tx.type;
-        const ct = await composeChr(key, mode) || (cur.slots[key] ? dataTexture(await imgLC(cur.slots[key], mode), !!(tx.flags & 1), !!(tx.flags & 2)) : null);
+        let ct = await composeChr(key, mode) || (cur.slots[key] ? dataTexture(await imgLC(cur.slots[key], mode), !!(tx.flags & 1), !!(tx.flags & 2)) : null);
+        if (!ct && key === 10) ct = await composeChr(6, mode); // type 10 ("mane") is drawn with the hair texture in game
         texs.push(ct); if (!ct) (texs.errors ||= []).push(`texture ${t} (type ${key}): no customization texture for it`);
       } else if (tx.type === 1 && cur.char) texs.push(await composeBody(mode));
       else if (cur.slots[tx.type]) texs.push(dataTexture(await imgLC(cur.slots[tx.type], mode), !!(tx.flags & 1), !!(tx.flags & 2)));
@@ -1374,7 +1375,8 @@ function gearItemPanel(P) {
     const grid = el("div", { style: "display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px" });
     for (const o of options) {
       const mine = o.mode && o.mode.files ? lcs.filter((lc) => o.mode.files.has(lc)) : lcs;
-      const on = effs.length === 1 && effs[0].toLowerCase() === o.key.toLowerCase();
+      // on = the build takes this option's files from it (files it doesn't have stay original)
+      const on = !rms.length && lcs.every((lc) => (sourceFor(lc, "build")?.key || "@game").toLowerCase() === (mine.includes(lc) ? o.key : "@game").toLowerCase());
       const t = el("div", { class: "thumb" + (on ? " on" : ""), style: "width:auto", title: o.label + (on ? " (in your build)" : "") + (mine.length < lcs.length ? `\n(has ${mine.length} of the ${lcs.length} files; the rest stay original)` : ""),
         onclick: async () => { for (const lc of lcs) { delete S.profile.remap[lc]; setPick(lc, mine.includes(lc) ? o.key : (isGamePath(lc) ? "@game" : null)); } await saveProfile(); S.gearItems = null; status("Build changed · press Build on the Load order tab to apply"); renderGearList(); refresh(); } },
         el("canvas", { width: 160, height: 120, style: "width:100%;height:auto" }), el("div", {}, (on ? "✓ " : "") + o.label));
