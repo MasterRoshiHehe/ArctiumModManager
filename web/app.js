@@ -126,6 +126,7 @@ async function loadProfile() {
     S.profile = { version: 1, sources: folders.map((f) => ({ path: f.Path, enabled: !!f.IsEnabled })), picks: {}, extraMappings: maps, imported: true };
     S.firstRun = true;
   }
+  S.profile.presets ||= {}; S.profile.lastPreset ||= {};
   S.profile.picks ||= {}; S.profile.extraMappings ||= []; S.profile.remap ||= {}; S.profile.hair ||= {};
 }
 async function saveProfile() {
@@ -246,7 +247,13 @@ async function loadMappings() {
 
 // ---------------------------------------------------------------- file resolution
 // mode: "build" (load order + picks), "game", or a source object (that mod, then the game)
+// A view can take the model from one source and the skins (textures) from another: mode = { mix: true, model, tex }
+const isTexLC = (lc) => lc.endsWith(".blp");
+const pickMode = (lc, mode) => (mode && mode.mix ? (isTexLC(lc) ? mode.tex : mode.model) : mode);
+const texMode = (mode) => (mode && mode.mix ? mode.tex : mode);
+const modelMode = (mode) => (mode && mode.mix ? mode.model : mode);
 function sourceFor(lc, mode) {
+  mode = pickMode(lc, mode);
   if (mode === "game") return null;
   if (mode && mode.files) return mode.files.has(lc) ? mode : null;
   const pick = S.profile.picks[lc];
@@ -257,7 +264,7 @@ function sourceFor(lc, mode) {
 }
 function isGamePath(lc) { return S.idByPath.has(lc) || S.customPaths.has(lc); }
 // "Use another texture": profile.remap[targetLc] = { lc: sourceLc, src: sourceKey | "@game" } — the build writes that file under the target's name
-const remapOf = (lc, mode) => (mode === "build" && ((cur.swapPreview && cur.swapPreview[lc]) || (S.profile.remap && S.profile.remap[lc]))) || null;
+const remapOf = (lc, mode) => (pickMode(lc, mode) === "build" && ((cur.swapPreview && cur.swapPreview[lc]) || (S.profile.remap && S.profile.remap[lc]))) || null;
 async function readRemap(r) {
   if (r.src === "@game") return S.casc.readFid(S.idByPath.get(r.lc));
   const s = S.sources.find((x) => x.key.toLowerCase() === r.src.toLowerCase());
@@ -302,21 +309,43 @@ function initViews() {
   V.setBackground("#191b21");
   $("#srcA").onchange = () => refresh();
   $("#srcB").onchange = () => refresh();
+  $("#texA").onchange = () => refresh();
+  $("#texB").onchange = () => refresh();
 }
-function modeFromSelect(sel) {
-  const v = sel.value;
+function selMode(v) {
   if (v === "build" || v === "game") return v;
   return S.sources.find((s) => s.key === v) || "build";
 }
-function fillSourceSelects(lcs) {
-  const touching = sourcesTouching(lcs);
-  for (const [id, def] of [["#srcA", "build"], ["#srcB", "game"]]) {
-    const sel = $(id), prev = sel.value;
-    sel.innerHTML = "";
-    sel.append(el("option", { value: "build" }, "Your build (load order + picks)"));
-    sel.append(el("option", { value: "game" }, "Original game"));
-    for (const s of touching) sel.append(el("option", { value: s.key }, "Mod: " + s.name + (s.enabled ? "" : " (off)")));
+// view i: model dropdown + skin dropdown ("same" = skins come from the same choice as the model)
+function modeFromSelect(sel) {
+  const model = selMode(sel.value);
+  const t = $(sel.id === "srcA" ? "#texA" : "#texB");
+  if (!t || t.style.display === "none" || !t.value || t.value === "same" || t.value === sel.value) return model;
+  return { mix: true, model, tex: selMode(t.value), key: sel.value + "+" + t.value };
+}
+// Model dropdown: mods that ship the model files. Skin dropdown: mods that ship textures for this model.
+function fillSourceSelects(lcs, texPrefix) {
+  const mdl = lcs.filter((lc) => !isTexLC(lc));
+  const modelSrc = sourcesTouching(mdl);
+  const texSrc = S.sources.filter((s) => {
+    for (const lc of s.files.keys()) if (isTexLC(lc) && (texPrefix ? lc.startsWith(texPrefix + "/") : lcs.includes(lc))) return true;
+    return false;
+  });
+  const hasModel = mdl.some((lc) => lc.endsWith(".m2"));
+  const opt = (s) => el("option", { value: s.key }, "Mod: " + s.name + (s.enabled ? "" : " (off)"));
+  for (const [id, tid, def] of [["#srcA", "#texA", "build"], ["#srcB", "#texB", "game"]]) {
+    const sel = $(id), prev = sel.value, tsel = $(tid), tprev = tsel.value;
+    sel.innerHTML = ""; tsel.innerHTML = "";
+    sel.append(el("option", { value: "build" }, (hasModel ? "Model: " : "") + "Your build (load order + picks)"));
+    sel.append(el("option", { value: "game" }, (hasModel ? "Model: " : "") + "Original game"));
+    for (const s of hasModel ? modelSrc : texSrc) sel.append(opt(s));
+    tsel.append(el("option", { value: "same" }, "Skins: same as model"));
+    tsel.append(el("option", { value: "build" }, "Skins: your build"));
+    tsel.append(el("option", { value: "game" }, "Skins: original game"));
+    for (const s of texSrc) tsel.append(el("option", { value: s.key }, "Skins: " + s.name + (s.enabled ? "" : " (off)")));
+    tsel.style.display = hasModel ? "" : "none";
     sel.value = [...sel.options].some((o) => o.value === prev) && cur.keepSel ? prev : def;
+    tsel.value = [...tsel.options].some((o) => o.value === tprev) && cur.keepSel ? tprev : "same";
   }
 }
 
@@ -390,7 +419,7 @@ async function selectEntry(e) {
   try { busy("Reading game tables..."); await loadCreatureTables(); if (cur.char) await loadChr(); } catch (err) { console.warn(err); }
   busy(null);
   if (!cur.char) cur.overlays = [];
-  fillSourceSelects([...dirFiles(e.dir)]);
+  fillSourceSelects([...dirFiles(e.dir)], cur.char ? e.dir : null);
   await refresh(true);
 }
 function parseCharDir(dir, modelLC) {
@@ -420,7 +449,7 @@ async function composeChr(type, mode) {
     after: type !== 1 ? null : async (g, rect) => {
       const order = [5, 6, 7, 3, 4, 0, 1, 2];
       for (const sec of order) for (const o of cur.overlays.filter((x) => x.section === sec)) {
-        const m = mode === "game" ? "game" : o.src ? o.src : mode;
+        const m = texMode(mode) === "game" ? "game" : o.src ? o.src : texMode(mode);
         const r = rect(sec); if (!r) continue;
         try { g.drawImage(imgToCanvas(await imgLC(o.lc, m)), r[0], r[1], r[2], r[3]); } catch {}
       }
@@ -547,7 +576,7 @@ async function composeBody(mode) {
   if (cur.slots.underwear) { await draw(`${pre}nakedpelvisskin00_${cur.slots.skin}${sfx}.blp`, 5); await draw(`${pre}nakedtorsoskin00_${cur.slots.skin}${sfx}.blp`, 3); }
   const order = [5, 6, 7, 3, 4, 0, 1, 2]; // legs, feet, chest, arms, hands
   for (const sec of order) for (const o of cur.overlays.filter((x) => x.section === sec)) {
-    const m = mode === "game" ? "game" : o.src ? o.src : mode;
+    const m = texMode(mode) === "game" ? "game" : o.src ? o.src : texMode(mode);
     await draw(o.lc, sec, m);
   }
   return canvasTexture(c);
@@ -561,10 +590,11 @@ async function loadSide(mode) {
   let skinB;
   try { skinB = model.skinFids[0] ? await readFid(model.skinFids[0], mode) : await readLC(cur.modelLC.replace(/\.m2$/, "00.skin"), mode); }
   catch { skinB = await readLC(cur.modelLC.replace(/\.m2$/, "00.skin"), mode); }
-  if (mode === "build" && Object.keys(hairCfg(cur.modelLC)).length) {
+  const mm = modelMode(mode);
+  if (mm === "build" && Object.keys(hairCfg(cur.modelLC)).length) {
     try { const r = await mixedFor(cur.modelLC, m2b, skinB); cur.hairNotes = r.notes; cur.hairErr = null; return { model: parseM2(r.m2), skin: parseSkin(r.skin), mixed: true }; }
     catch (e) { cur.hairErr = e.message; cur.hairNotes = null; }
-  } else if (mode === "build") { cur.hairErr = null; cur.hairNotes = null; }
+  } else if (mm === "build") { cur.hairErr = null; cur.hairNotes = null; }
   return { model, skin: parseSkin(skinB) };
 }
 // --- hair mixer: profile.hair[modelLc] = { styleId: { src: sourceKey | "@game", fit } }
@@ -687,6 +717,8 @@ async function refresh(first = false) {
     cur.geo = defaultGeo({ submeshes: [...ids].map((id) => ({ id })) });
     if (cur.char && CHR) { cur.cm = CHR.modelFor(S.idByPath.get(cur.modelLC)) || null; if (cur.cm) { cur.custom = CHR.defaults(cur.cm); applyCustomGeo(); } }
     cur.inited = true;
+    const ap = (S.profile.lastPreset || {})[cur.modelLC];
+    if (ap && presetsFor()[ap]) applyPreset(presetsFor()[ap]);
   }
   for (let i = 0; i < 2; i++) {
     const x = loaded[i];
@@ -722,6 +754,48 @@ async function show2D(i, lc, mode) {
 }
 
 // --- properties panel
+// --- character design presets: profile.presets[modelLc][name] = { custom, slots, geo, overlays }
+// The design stays while the model / skin dropdowns change, so the same look can be compared across mods.
+const presetsFor = () => (S.profile.presets[cur.modelLC] ||= {});
+function presetOf() {
+  return {
+    custom: { ...(cur.custom || {}) },
+    slots: { ...cur.slots },
+    geo: cur.geo ? [...cur.geo.on] : [],
+    overlays: cur.overlays.map((o) => ({ section: o.section, lc: o.lc, src: o.src ? o.src.key : null, setKey: o.setKey, label: o.label })),
+  };
+}
+function applyPreset(p) {
+  if (p.custom && cur.cm) { cur.custom = { ...cur.custom }; for (const [k, v] of Object.entries(p.custom)) cur.custom[k] = v; applyCustomGeo(); }
+  if (p.slots) Object.assign(cur.slots, p.slots);
+  if (p.geo && cur.geo) cur.geo.on = new Set(p.geo.filter((id) => cur.geo.ids.includes(id)));
+  if (p.overlays) cur.overlays = p.overlays.map((o) => ({ ...o, src: o.src ? S.sources.find((x) => x.key.toLowerCase() === o.src.toLowerCase()) || null : null }));
+}
+function presetPanel(P) {
+  const all = presetsFor(), names = Object.keys(all).sort((a, b) => a.localeCompare(b));
+  const last = S.profile.lastPreset[cur.modelLC] || "";
+  const sel = el("select", { style: "flex:1", onchange: async () => {
+    const n = sel.value;
+    if (n) { applyPreset(all[n]); S.profile.lastPreset[cur.modelLC] = n; } else delete S.profile.lastPreset[cur.modelLC];
+    await saveProfile(); refresh();
+  } });
+  sel.append(el("option", { value: "" }, names.length ? "(no preset)" : "(no presets yet)"));
+  for (const n of names) sel.append(el("option", { value: n, selected: n === last }, n));
+  const save = el("button", { onclick: async () => {
+    const n = (prompt("Name for this character design (same name = overwrite):", last || "My character") || "").trim();
+    if (!n) return;
+    all[n] = presetOf(); S.profile.lastPreset[cur.modelLC] = n;
+    await saveProfile(); renderProps(cur.modelA, cur.skinA); status(`Saved preset "${n}"`);
+  } }, "Save as...");
+  const del = el("button", { disabled: !last, onclick: async () => {
+    if (!last || !confirm(`Delete preset "${last}"?`)) return;
+    delete all[last]; delete S.profile.lastPreset[cur.modelLC];
+    await saveProfile(); renderProps(cur.modelA, cur.skinA);
+  } }, "Delete");
+  P.append(el("h3", {}, "My character presets"),
+    el("div", { class: "note" }, "Saves the look (customization, hair, parts, gear you're trying on). The chosen preset loads every time you open this model."),
+    el("div", { class: "row" }, sel, save, del));
+}
 function renderProps(model, skin) {
   const P = $("#mProps"); P.innerHTML = "";
   gearItemPanel(P);
@@ -733,6 +807,7 @@ function renderProps(model, skin) {
     P.append(el("h3", {}, "Model"), sel);
   }
   if (model) {
+    if (cur.char) presetPanel(P);
     P.append(el("h3", {}, "Textures"));
     if (cur.cm) {
       for (const o of CHR.options(cur.cm)) {
