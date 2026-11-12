@@ -433,8 +433,48 @@ static class App
         catch { }
     }
 
+    // Explorer-style folder window (Vista+ IFileOpenDialog); the old tree dialog only as a fallback
+    [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")] class FileOpenDialogCo { }
+    [ComImport, Guid("42f85136-db7e-439c-85f1-e4075d135fc8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IFileDialog
+    {
+        [PreserveSig] int Show(IntPtr parent);
+        void SetFileTypes(uint n, IntPtr specs); void SetFileTypeIndex(uint i); void GetFileTypeIndex(out uint i);
+        void Advise(IntPtr sink, out uint cookie); void Unadvise(uint cookie);
+        void SetOptions(uint fos); void GetOptions(out uint fos);
+        void SetDefaultFolder(IShellItem si); void SetFolder(IShellItem si); void GetFolder(out IShellItem si); void GetCurrentSelection(out IShellItem si);
+        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string name); void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string title); void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string text); void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+        void GetResult(out IShellItem si);
+    }
+    [ComImport, Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellItem
+    {
+        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv); void GetParent(out IShellItem si);
+        void GetDisplayName(uint sigdn, [MarshalAs(UnmanagedType.LPWStr)] out string name);
+    }
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    static extern void SHCreateItemFromParsingName(string path, IntPtr pbc, [MarshalAs(UnmanagedType.LPStruct)] Guid riid, out IShellItem item);
+
     static string PickFolder(string title, string start, IWin32Window owner)
     {
+        try
+        {
+            var d = (IFileDialog)new FileOpenDialogCo();
+            d.SetOptions(0x20 | 0x40 | 0x800); // pick folders, file system only, path must exist
+            d.SetTitle(title); d.SetOkButtonLabel("Select folder");
+            if (!string.IsNullOrEmpty(start) && Directory.Exists(start))
+            {
+                try { IShellItem f; SHCreateItemFromParsingName(start, IntPtr.Zero, new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), out f); d.SetFolder(f); } catch { }
+            }
+            int hr = d.Show(owner != null ? owner.Handle : IntPtr.Zero);
+            if (hr != 0) return null; // cancelled
+            IShellItem r; d.GetResult(out r);
+            string path; r.GetDisplayName(0x80058000, out path); // SIGDN_FILESYSPATH
+            return path;
+        }
+        catch (COMException) { }
+        catch (InvalidCastException) { }
         using (var d = new FolderBrowserDialog())
         {
             d.Description = title; d.ShowNewFolderButton = false;
