@@ -878,16 +878,17 @@ async function sideTextures(model, mode) {
     const tx = model.textures[t];
     try {
       if (tx.type === 0) {
-        if (!tx.fid) { texs.push(null); continue; }
+        if (!tx.fid) { texs.push(null); (texs.errors ||= []).push(`texture ${t}: no file ID in the model`); continue; }
         const s = sourceFor(lcForFid(tx.fid) || "", mode);
         const img = await loadImg((s ? s.key : "game") + "|fid" + tx.fid, () => readFid(tx.fid, mode));
         texs.push(dataTexture(img, !!(tx.flags & 1), !!(tx.flags & 2)));
       } else if (cur.cm) {
         const key = tx.type;
-        texs.push(await composeChr(key, mode) || (cur.slots[key] ? dataTexture(await imgLC(cur.slots[key], mode), !!(tx.flags & 1), !!(tx.flags & 2)) : null));
+        const ct = await composeChr(key, mode) || (cur.slots[key] ? dataTexture(await imgLC(cur.slots[key], mode), !!(tx.flags & 1), !!(tx.flags & 2)) : null);
+        texs.push(ct); if (!ct) (texs.errors ||= []).push(`texture ${t} (type ${key}): no customization texture for it`);
       } else if (tx.type === 1 && cur.char) texs.push(await composeBody(mode));
       else if (cur.slots[tx.type]) texs.push(dataTexture(await imgLC(cur.slots[tx.type], mode), !!(tx.flags & 1), !!(tx.flags & 2)));
-      else texs.push(null);
+      else { texs.push(null); (texs.errors ||= []).push(`texture ${t} (type ${tx.type}): no skin chosen for it`); }
     } catch (e) { texs.push(null); (texs.errors ||= []).push(`texture ${t}${model.textures[t].fid ? " (ID " + model.textures[t].fid + ")" : " (type " + model.textures[t].type + ")"}: ${e?.message || e}`); }
   }
   return texs;
@@ -926,7 +927,9 @@ async function refresh(first = false) {
     if (!cur.framed) { V.frame(box); cur.framed = true; }
     const src = sourceFor(cur.modelLC, sides[i]);
     msgs[i].textContent = `${basename(cur.modelLC)} · ${src ? "from " + src.name : "game file"}${x.mixed ? " + mixed hair" : ""} · ${x.model.pos.length / 3} vertices`;
-    if (texs.errors) { msgs[i].textContent += ` · ${texs.errors.length} texture(s) failed: ` + texs.errors.join("; "); console.warn("textures", texs.errors); }
+    const used = new Set(x.skin.batches.filter((b) => { const sm = x.skin.submeshes[b.submesh]; return sm && geoOn(i, sm.id); }).map((b) => x.model.textureLookup[b.textureCombo]));
+    texs.errors = (texs.errors || []).filter((e) => used.has(+/^texture (\d+)/.exec(e)[1]));
+    if (texs.errors.length) { msgs[i].textContent += ` · ${texs.errors.length} texture(s) missing: ` + texs.errors.join("; "); console.warn("textures", texs.errors); }
   }
   const first0 = ok[0];
   cur.modelA = loaded[0].error ? first0?.model : loaded[0].model;
