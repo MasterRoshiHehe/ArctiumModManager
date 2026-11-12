@@ -1710,7 +1710,7 @@ function renderOrderPage() {
     el("p", { class: "note" }, "The order list below only decides files you never chose anything for: when two switched-on mods ship the same file, the higher one wins. You don't need to touch it."),
     el("p", {}, "In the Arctium app, turn off your other mod folders and add just these two once:"),
     el("div", {}, "Mod folder: ", el("code", {}, S.info.outputDir)),
-    el("div", {}, "File mapping: ", el("code", {}, winJoin(S.info.appDir, "LoadOrder-mappings.txt"))),
+    el("div", {}, "File mapping: ", el("code", {}, winJoin(S.info.outputDir, "LoadOrder-mappings.txt"))),
     el("p", { class: "note" }, "The build uses hard links where it can, so it takes no extra disk space and nothing in your mod folders is changed."));
   if (S.firstRun) intro.append(el("p", { class: "warn" }, "First run: the order and on/off states were copied from your current Arctium setup."));
   P.append(intro);
@@ -1840,6 +1840,7 @@ async function build(out) {
         lines.push(`K\t\t${lc}`); fromGame++;
       }
     }
+    lines.push("K\t\tLoadOrder-mappings.txt"); // the mapping file lives in the output folder too; keep it
     const r = await (await api("/api/build", {}, { method: "POST", body: lines.join("\n") })).json();
     const rep = await checkMappings(null, files);
     out.textContent = `Build done: ${lines.length} files in ${S.info.outputDir}\n` +
@@ -1901,8 +1902,8 @@ async function checkMappings(out, files) {
     await loadMappings();
   }
   const txt = [...lines.entries()].sort((a, b) => a[0] - b[0]).map(([f, p]) => `${f};${p}`).join("\n") + "\n";
-  await api("/api/write", { p: winJoin(S.info.appDir, "LoadOrder-mappings.txt") }, { method: "POST", body: txt });
-  const rep = `Mapping file written: ${lines.size} lines -> ${winJoin(S.info.appDir, "LoadOrder-mappings.txt")}\n` +
+  await api("/api/write", { p: winJoin(S.info.outputDir, "LoadOrder-mappings.txt") }, { method: "POST", body: txt });
+  const rep = `Mapping file written: ${lines.size} lines -> ${winJoin(S.info.outputDir, "LoadOrder-mappings.txt")}\n` +
     (S.mappingConflicts.length ? `Duplicate IDs (first kept):\n  ${S.mappingConflicts.map((c) => `${c.fid}: kept ${c.kept.path} (${c.kept.origin}), dropped ${c.dropped.path} (${c.dropped.origin})`).join("\n  ")}\n` : "") +
     (problems.length ? `Problems:\n  ${problems.join("\n  ")}\n` : "No missing textures found in your build's models.\n") +
     (unused.length ? `${unused.length} mapping lines left out because their file isn't in your build (that mod is off): ${unused.slice(0, 4).join(", ")}${unused.length > 4 ? ", ..." : ""}\n` : "");
