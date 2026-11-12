@@ -1740,7 +1740,7 @@ function renderOrderPage() {
   else {
     const t = el("table");
     for (const [lc, v] of picks.sort()) t.append(el("tr", {}, el("td", {}, lc), el("td", {}, v === "@game" ? "Original game" : srcName(v)), el("td", {}, el("button", { onclick: async () => { setPick(lc, null); await saveProfile(); renderOrderPage(); } }, "Remove"))));
-    pc.append(t, el("button", { onclick: async () => { S.profile.picks = {}; await saveProfile(); renderOrderPage(); } }, "Remove all picks"));
+    pc.append(el("button", { style: "margin-bottom:6px", onclick: async () => { S.profile.picks = {}; await saveProfile(); renderOrderPage(); } }, "Remove all picks"), t);
   }
   P.append(pc);
 
@@ -1757,6 +1757,8 @@ function renderOrderPage() {
   const out = el("pre", { style: "display:none" });
   bc.append(el("div", { class: "row" }, el("button", { class: "primary", onclick: () => build(out) }, "Build my Arctium folder"), el("button", { onclick: () => checkMappings(out) }, "Only check mappings")), out);
   P.append(bc);
+  // Build and mappings go at the top, under the intro, so the long lists don't push them out of reach
+  P.insertBefore(mc, intro.nextSibling); P.insertBefore(bc, intro.nextSibling);
 }
 async function afterOrderChange() { S.gearCache = null; S.gearItems = null; await saveProfile(); await loadMappings(); renderOrderPage(); renderModelList(); status(`${S.sources.filter((s) => s.enabled).length} of ${S.sources.length} mod folders on · press Build to apply`); }
 async function move(i, d) { const [s] = S.sources.splice(i, 1); S.sources.splice(i + d, 0, s); await afterOrderChange(); }
