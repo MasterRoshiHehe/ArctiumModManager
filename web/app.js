@@ -336,6 +336,10 @@ async function loadMappings() {
   try { parse(await apiText("/api/read", { p: winJoin(S.info.appDir, "extra-mappings.txt") }), "Arctium Mod Manager fixes"); } catch {}
   for (const p of S.profile.extraMappings) { try { parse(await apiText("/api/read", { p }), basename(p.replace(/\\/g, "/"))); } catch (e) { S.mappingIssues.push("Could not read mapping file " + p); } }
   for (const s of S.sources) if (s.enabled) for (const rel of s.txts || []) { try { parse(await apiText("/api/read", { p: winJoin(s.abs, rel) }), s.name + " / " + basename(rel)); } catch {} }
+  // switched-off mods too, so their previews find their textures (the build only writes IDs of files it ships; enabled mods win on duplicates)
+  const nConf = S.mappingConflicts.length;
+  for (const s of S.sources) if (!s.enabled) for (const rel of s.txts || []) { try { parse(await apiText("/api/read", { p: winJoin(s.abs, rel) }), s.name + " / " + basename(rel)); } catch {} }
+  S.mappingConflicts.length = nConf;
 }
 
 // ---------------------------------------------------------------- file resolution
@@ -885,7 +889,7 @@ async function sideTextures(model, mode) {
       } else if (tx.type === 1 && cur.char) texs.push(await composeBody(mode));
       else if (cur.slots[tx.type]) texs.push(dataTexture(await imgLC(cur.slots[tx.type], mode), !!(tx.flags & 1), !!(tx.flags & 2)));
       else texs.push(null);
-    } catch (e) { texs.push(null); }
+    } catch (e) { texs.push(null); (texs.errors ||= []).push(`texture ${t}${model.textures[t].fid ? " (ID " + model.textures[t].fid + ")" : " (type " + model.textures[t].type + ")"}: ${e?.message || e}`); }
   }
   return texs;
 }
@@ -923,6 +927,7 @@ async function refresh(first = false) {
     if (!cur.framed) { V.frame(box); cur.framed = true; }
     const src = sourceFor(cur.modelLC, sides[i]);
     msgs[i].textContent = `${basename(cur.modelLC)} · ${src ? "from " + src.name : "game file"}${x.mixed ? " + mixed hair" : ""} · ${x.model.pos.length / 3} vertices`;
+    if (texs.errors) { msgs[i].textContent += ` · ${texs.errors.length} texture(s) failed: ` + texs.errors.join("; "); console.warn("textures", texs.errors); }
   }
   const first0 = ok[0];
   cur.modelA = loaded[0].error ? first0?.model : loaded[0].model;
