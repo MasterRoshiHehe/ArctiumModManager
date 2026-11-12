@@ -398,8 +398,34 @@ function initViews() {
   V.setBackground("#191b21");
   $("#srcA").onchange = () => refresh();
   $("#srcB").onchange = () => refresh();
-  $("#texA").onchange = () => refresh();
-  $("#texB").onchange = () => refresh();
+  for (const id of ["#srcA", "#texA", "#srcB"]) $(id).onchange = async () => { await saveViewSel(); refresh(); };
+  $("#useA").onclick = () => useViewInBuild();
+}
+// the view dropdowns are remembered per model: profile.view[entry key] = { srcA, texA, srcB }
+async function saveViewSel() {
+  if (!cur.entry) return;
+  (S.profile.view ||= {})[cur.entry.key] = { srcA: $("#srcA").value, texA: $("#texA").value, srcB: $("#srcB").value };
+  await saveProfile();
+}
+// "Use in my build": the left view's model and skins become per-file picks, so Build produces what the left view shows
+async function useViewInBuild() {
+  if (!cur.entry || !cur.viewFiles) return;
+  const m = $("#srcA").value, t = $("#texA").style.display === "none" ? m : ($("#texA").value === "same" ? m : $("#texA").value);
+  const src = (v) => (v === "game" ? "@game" : v === "build" ? undefined : S.sources.find((x) => x.key === v));
+  const { mdl, texPrefix, lcs } = cur.viewFiles;
+  const texFiles = new Set(lcs.filter(isTexLC));
+  if (texPrefix) for (const x of S.sources) for (const lc of x.files.keys()) if (isTexLC(lc) && lc.startsWith(texPrefix + "/")) texFiles.add(lc);
+  const ms = src(m), ts = src(t);
+  if (ms === undefined && ts === undefined) { status("The left view already shows your build."); return; }
+  let n = 0;
+  const pick = (lc, s) => { if (s === undefined) return; if (s === "@game") { if (S.idByPath.has(lc)) { setPick(lc, "@game"); n++; } } else if (s.files.has(lc)) { setPick(lc, s.key); n++; } else if (S.profile.picks[lc] && !isTexLC(lc)) { setPick(lc, null); } };
+  for (const lc of mdl) pick(lc, ms);
+  for (const lc of texFiles) pick(lc, ts);
+  await saveProfile();
+  $("#srcA").value = "build"; $("#texA").value = "same"; await saveViewSel();
+  S.gearCache = null; mixCache = null;
+  status(`${n} files picked for your build. Press Build on the Load order tab to apply them.`);
+  refresh();
 }
 function selMode(v) {
   if (v === "build" || v === "game") return v;
@@ -422,6 +448,8 @@ function fillSourceSelects(lcs, texPrefix) {
   });
   const hasModel = mdl.some((lc) => lc.endsWith(".m2"));
   const opt = (s) => el("option", { value: s.key }, "Mod: " + s.name + (s.enabled ? "" : " (off)"));
+  cur.viewFiles = { mdl, texPrefix, lcs };
+  const saved = (S.profile.view || {})[cur.entry?.key] || {};
   for (const [id, tid, def] of [["#srcA", "#texA", "build"], ["#srcB", "#texB", "game"]]) {
     const sel = $(id), prev = sel.value, tsel = $(tid), tprev = tsel.value;
     sel.innerHTML = ""; tsel.innerHTML = "";
@@ -433,8 +461,10 @@ function fillSourceSelects(lcs, texPrefix) {
     tsel.append(el("option", { value: "game" }, "Skins: original game"));
     for (const s of texSrc) tsel.append(el("option", { value: s.key }, "Skins: " + s.name + (s.enabled ? "" : " (off)")));
     tsel.style.display = hasModel && id === "#srcA" ? "" : "none"; // skins are picked for the left view only; the right stays a plain comparison
-    sel.value = [...sel.options].some((o) => o.value === prev) && cur.keepSel ? prev : def;
-    tsel.value = [...tsel.options].some((o) => o.value === tprev) && cur.keepSel ? tprev : "same";
+    const has = (x, v) => v && [...x.options].some((o) => o.value === v);
+    const want = id === "#srcA" ? saved.srcA : saved.srcB, twant = id === "#srcA" ? saved.texA : null;
+    sel.value = has(sel, want) ? want : has(sel, prev) && cur.keepSel ? prev : def;
+    tsel.value = has(tsel, twant) ? twant : has(tsel, tprev) && cur.keepSel ? tprev : "same";
   }
 }
 
@@ -631,7 +661,8 @@ function defaultGeo(skin) {
       else list.forEach((x) => on.add(x));
     } else {
       if (cur.char && g === 17) continue; // 17xx = death knight eye glow
-      const d = (cur.char && g === 32 && list.includes(3202)) ? 3202 : list.find((x) => x % 100 === 1); // 3202 = face (3201 = hidden under helmets)
+      // 3202 = face (3201 = hidden under helmets); 702 = ears (701 = no ears)
+      const d = (cur.char && g === 32 && list.includes(3202)) ? 3202 : (cur.char && g === 7 && list.includes(702)) ? 702 : list.find((x) => x % 100 === 1); // 3202 = face (3201 = hidden under helmets)
       if (d !== undefined) on.add(d);
       else if (!cur.char) on.add(list[0]);
     }
@@ -1568,7 +1599,7 @@ function loadOrderSaves() {
   for (const n of names) sel.append(el("option", { value: n, selected: n === S.profile.currentLoadOrder }, `${n}  ·  ${all[n].sources.filter((x) => x.enabled).length} on  ·  ${(all[n].saved || "").slice(0, 16).replace("T", " ")}`));
   const snap = () => {
     const P = S.profile, copy = (o) => JSON.parse(JSON.stringify(o || {}));
-    return { sources: S.sources.map((x) => ({ path: x.key, enabled: x.enabled })), picks: copy(P.picks), remap: copy(P.remap), hair: copy(P.hair), saved: new Date().toISOString() };
+    return { sources: S.sources.map((x) => ({ path: x.key, enabled: x.enabled })), picks: copy(P.picks), remap: copy(P.remap), hair: copy(P.hair), view: copy(P.view), saved: new Date().toISOString() };
   };
   const save = el("button", { onclick: async () => {
     const n = (prompt("Name for this load order (same name = overwrite):", S.profile.currentLoadOrder || "Plan 1") || "").trim();
@@ -1580,7 +1611,7 @@ function loadOrderSaves() {
     const n = sel.value; if (!n) return;
     if (!confirm(`Switch to "${n}"? Your current order, on/off states, picks, swaps and hair choices are replaced (save them first if you want to keep them).`)) return;
     const L = JSON.parse(JSON.stringify(all[n]));
-    Object.assign(S.profile, { sources: L.sources, picks: L.picks || {}, remap: L.remap || {}, hair: L.hair || {}, currentLoadOrder: n });
+    Object.assign(S.profile, { sources: L.sources, picks: L.picks || {}, remap: L.remap || {}, hair: L.hair || {}, view: L.view || S.profile.view || {}, currentLoadOrder: n });
     busy("Loading " + n + "...");
     try { await scanSources(); await saveProfile(); await loadMappings(); } finally { busy(null); }
     S.gearCache = null; S.gearItems = null; mixCache = null;
