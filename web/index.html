@@ -33,6 +33,11 @@ main { position:absolute; top:46px; left:0; right:0; bottom:0; }
 .view { flex:1; position:relative; min-width:0; }
 .view canvas { width:100%; height:100%; display:block; }
 .view .lbl { position:absolute; top:8px; left:8px; right:8px; display:flex; gap:6px; align-items:center; }
+#fdlg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; z-index:50; }
+#fdlg.on { display:flex; }
+#fdlg .box { background:#1e2128; border:1px solid #3a3f4b; border-radius:8px; padding:16px; width:min(680px,94vw); display:flex; flex-direction:column; gap:10px; }
+#fdlg .box input[type=text] { flex:1; min-width:0; }
+#fdlg .err { color:#ff8a7a; min-height:1em; }
 .view .lbl select { max-width:100%; min-width:0; flex:1 1 0; background:rgba(30,33,40,.9); }
 .view .lbl select[style*="display: none"] { display:none; }
 .view .msg { position:absolute; bottom:8px; left:8px; right:8px; color:var(--muted); font-size:12px; pointer-events:none; }
@@ -82,6 +87,7 @@ pre { background:var(--panel2); padding:8px; border-radius:6px; max-height:300px
     <button data-tab="order">Load order &amp; build</button>
   </nav>
   <div id="status">Starting...</div>
+  <button id="folders" title="Choose the WoW folder, mods folder and Arctium folder">Folders</button>
   <button id="quit" title="Stop the helper program">Quit</button>
 </header>
 <main>

@@ -285,10 +285,63 @@ static class App
             break;
         }
         WowRoot = tbW.Text.TrimEnd('\\'); ModsRoot = tbM.Text.TrimEnd('\\'); ArctiumState = tbA.Text.TrimEnd('\\'); Product = cb.Text.Trim() == "" ? "_retail_" : cb.Text.Trim();
+        SaveSettings();
+        return true;
+    }
+
+    static void SaveSettings()
+    {
         var o2 = new Dictionary<string, object>();
         o2["WowRoot"] = WowRoot; o2["Product"] = Product; o2["ModsRoot"] = ModsRoot; o2["ArctiumState"] = ArctiumState;
         File.WriteAllText(SettingsFile, Json.Serialize(o2), new UTF8Encoding(false));
-        return true;
+    }
+
+    // folder settings changed from the page: check, apply, save (the page reloads afterwards)
+    static string ApplySettings(Dictionary<string, object> s)
+    {
+        Func<string, string> get = k => s != null && s.ContainsKey(k) && s[k] != null ? s[k].ToString().Trim().TrimEnd('\\') : "";
+        string w = get("wowRoot"), m = get("modsRoot"), a = get("arctiumState"), pr = get("product");
+        if (w == "" || !Directory.Exists(Path.Combine(w, "Data"))) return "The World of Warcraft folder must contain a \"Data\" folder.";
+        if (m == "" || !Directory.Exists(m)) return "The mods folder doesn't exist.";
+        if (a == "") a = ArctiumState;
+        if (!File.Exists(Path.Combine(a, @"config\appsettings.Mods.json"))) return "The Arctium folder must contain config\\appsettings.Mods.json.";
+        if (pr == "") { string[] ps = Products(w); pr = ps.Contains(Product) ? Product : ps.Contains("_forever_") ? "_forever_" : ps.Length > 0 ? ps[0] : "_retail_"; }
+        if (!Directory.Exists(Path.Combine(w, pr))) return "There is no " + pr + " folder in the World of Warcraft folder.";
+        WowRoot = w; ModsRoot = m; Product = pr;
+        if (!a.Equals(ArctiumState, StringComparison.OrdinalIgnoreCase))
+        {
+            ArctiumState = a;
+            ConfigFile = Path.Combine(ArctiumState, @"config\appsettings.Mods.json");
+            string fm = Path.Combine(ArctiumState, @"apps\704159964\mappings\filemapping.txt");
+            if (!File.Exists(fm)) { try { string apps = Path.Combine(ArctiumState, "apps"); string f = Directory.EnumerateFiles(apps, "filemapping.txt", SearchOption.AllDirectories).FirstOrDefault(); if (f != null) fm = f; } catch { } }
+            FileMapping = fm;
+        }
+        lock (rootsLock) rootsCache = null;
+        SaveSettings();
+        Log("folders changed: " + WowRoot + " / " + Product + " / " + ModsRoot);
+        return null;
+    }
+
+    // folder picker for the page: shown on the UI thread, on top of the app window
+    static string PickFolderForPage(string title, string start)
+    {
+        string result = null;
+        var done = new ManualResetEvent(false);
+        OnUi(() =>
+        {
+            try
+            {
+                using (var owner = new Form { TopMost = true, ShowInTaskbar = false, FormBorderStyle = FormBorderStyle.None, Opacity = 0, Size = new Size(1, 1), StartPosition = FormStartPosition.CenterScreen })
+                {
+                    owner.Show(); owner.Activate();
+                    result = PickFolder(title, start, owner);
+                }
+            }
+            catch (Exception e) { Log("picker: " + e.Message); }
+            finally { done.Set(); }
+        });
+        done.WaitOne();
+        return result;
     }
 
     static string[] Products(string root)
@@ -569,6 +622,18 @@ static class App
                     }
                 case "/api/build":
                     Build(ctx); break;
+                case "/api/pickfolder":
+                    Text(ctx, 200, PickFolderForPage(Q(q, "title") == "" ? "Choose a folder" : Q(q, "title"), Q(q, "start")) ?? ""); break;
+                case "/api/products":
+                    Text(ctx, 200, Json.Serialize(Products(Q(q, "p"))), "application/json"); break;
+                case "/api/settings":
+                    {
+                        Dictionary<string, object> s;
+                        try { s = Json.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(Body(ctx))); } catch { Text(ctx, 400, "bad request"); break; }
+                        string err = ApplySettings(s);
+                        if (err != null) Text(ctx, 400, err); else Text(ctx, 200, "ok");
+                        break;
+                    }
                 case "/api/quit":
                     Text(ctx, 200, "bye");
                     OnUi(Quit);

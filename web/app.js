@@ -1714,6 +1714,51 @@ function switchTab(name) {
   if (name === "order") renderOrderPage();
 }
 $("#nav").onclick = (e) => { if (e.target.dataset.tab) switchTab(e.target.dataset.tab); };
+// ---------------------------------------------------------------- folder settings (WoW folder, mods folder, Arctium folder)
+async function openFolders() {
+  let info = S.info; try { info = await (await api("/api/info")).json(); } catch {}
+  info ||= {};
+  let dlg = $("#fdlg"); if (dlg) dlg.remove();
+  const err = el("div", { class: "err" });
+  const prod = el("select", {});
+  const fillProducts = async (root, keep) => {
+    let list = []; try { list = await (await api("/api/products", { p: root })).json(); } catch {}
+    prod.innerHTML = "";
+    for (const x of list) prod.append(el("option", { value: x, selected: x === keep }, x));
+    if (!list.length) prod.append(el("option", { value: "" }, "(no game version found)"));
+  };
+  const row = (label, value, title, onpick) => {
+    const inp = el("input", { type: "text", value: value || "" });
+    const btn = el("button", { onclick: async () => {
+      btn.disabled = true; err.textContent = "A folder window is open (it may be behind this window)...";
+      try { const r = (await apiText("/api/pickfolder", { title, start: inp.value })).trim(); if (r) { inp.value = r; onpick && onpick(r); } } catch (e) { err.textContent = "Couldn't open the folder picker: " + e.message; }
+      if (err.textContent.startsWith("A folder window")) err.textContent = "";
+      btn.disabled = false;
+    } }, "Browse...");
+    return { inp, node: el("div", {}, el("div", { class: "note" }, label), el("div", { class: "row" }, inp, btn)) };
+  };
+  const w = row("World of Warcraft folder (the one that holds the Data folder)", info.wowRoot, "World of Warcraft folder", (r) => fillProducts(r, prod.value));
+  const m = row("Mods folder (holds your Arctium mod folders, any depth)", info.modsRoot, "Mods folder");
+  const a = row("Arctium app data folder (LocalState, holds a config folder)", (info.configFile || "").replace(/\\config\\[^\\]+$/i, ""), "Arctium app data folder");
+  w.inp.onchange = () => fillProducts(w.inp.value, prod.value);
+  await fillProducts(info.wowRoot || "", info.product);
+  const save = el("button", { onclick: async () => {
+    err.textContent = "Saving...";
+    try {
+      const r = await fetch("/api/settings", { method: "POST", body: JSON.stringify({ wowRoot: w.inp.value, modsRoot: m.inp.value, arctiumState: a.inp.value, product: prod.value }) });
+      const t = await r.text();
+      if (!r.ok) { err.textContent = t || "Couldn't save."; return; }
+      err.textContent = "Saved. Reloading..."; setTimeout(() => location.reload(), 300);
+    } catch (e) { err.textContent = "Couldn't save: " + e.message + " (an older version of the program may be running; restart it)"; }
+  } }, "Save and reload");
+  dlg = el("div", { id: "fdlg", class: "on", onclick: (ev) => { if (ev.target === dlg) dlg.remove(); } },
+    el("div", { class: "box" },
+      el("div", { style: "font-weight:600;font-size:15px" }, "Folders"),
+      w.node, el("div", { class: "row" }, el("span", { class: "note" }, "Game version"), prod), m.node, a.node, err,
+      el("div", { class: "row", style: "justify-content:flex-end" }, el("button", { onclick: () => dlg.remove() }, "Cancel"), save)));
+  document.body.append(dlg);
+}
+$("#folders").onclick = () => openFolders();
 $("#quit").onclick = async () => { try { await fetch("/api/quit"); } catch {} document.body.innerHTML = "<p style='padding:20px'>Arctium Mod Manager stopped. You can close this tab.</p>"; };
 
 window.AS = { openModel };
