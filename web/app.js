@@ -406,8 +406,9 @@ function initViews() {
   V.setBackground("#191b21");
   $("#srcA").onchange = () => refresh();
   $("#srcB").onchange = () => refresh();
-  for (const id of ["#srcA", "#texA", "#srcB"]) $(id).onchange = async () => { await saveViewSel(); refresh(); };
-  $("#useA").onclick = () => useViewInBuild();
+  // choosing a model or skin on the left puts it straight into your build
+  for (const id of ["#srcA", "#texA"]) $(id).onchange = async () => { await saveViewSel(); await useViewInBuild(); refresh(); };
+  $("#srcB").onchange = async () => { await saveViewSel(); refresh(); };
 }
 // the view dropdowns are remembered per model: profile.view[entry key] = { srcA, texA, srcB }
 async function saveViewSel() {
@@ -415,7 +416,7 @@ async function saveViewSel() {
   (S.profile.view ||= {})[cur.entry.key] = { srcA: $("#srcA").value, texA: $("#texA").value, srcB: $("#srcB").value };
   await saveProfile();
 }
-// "Use in my build": the left view's model and skins become per-file picks, so Build produces what the left view shows
+// The left view's model and skins become per-file picks, so Build produces what the left view shows
 async function useViewInBuild() {
   if (!cur.entry || !cur.viewFiles) return;
   const m = $("#srcA").value, t = $("#texA").style.display === "none" ? m : ($("#texA").value === "same" ? m : $("#texA").value);
@@ -424,16 +425,14 @@ async function useViewInBuild() {
   const texFiles = new Set(lcs.filter(isTexLC));
   if (texPrefix) for (const x of S.sources) for (const lc of x.files.keys()) if (isTexLC(lc) && [].concat(texPrefix).some((p) => lc.startsWith(p + "/"))) texFiles.add(lc);
   const ms = src(m), ts = src(t);
-  if (ms === undefined && ts === undefined) { status("The left view already shows your build."); return; }
+  if (ms === undefined && ts === undefined) return;
   let n = 0;
   const pick = (lc, s) => { if (s === undefined) return; if (s === "@game") { if (S.idByPath.has(lc)) { setPick(lc, "@game"); n++; } } else if (s.files.has(lc)) { setPick(lc, s.key); n++; } else if (S.profile.picks[lc] && !isTexLC(lc)) { setPick(lc, null); } };
   for (const lc of mdl) pick(lc, ms);
   for (const lc of texFiles) pick(lc, ts);
   await saveProfile();
-  $("#srcA").value = "build"; $("#texA").value = "same"; await saveViewSel();
   S.gearCache = null; mixCache = null;
-  status(`${n} files picked for your build. Press Build on the Load order tab to apply them.`);
-  refresh();
+  status(`Your build now uses this (${n} files). Press Build on the Load order tab to put it in game.`);
 }
 function selMode(v) {
   if (v === "build" || v === "game") return v;
