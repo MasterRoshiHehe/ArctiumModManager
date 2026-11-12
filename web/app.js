@@ -1704,7 +1704,8 @@ function loadOrderSaves() {
 function renderOrderPage() {
   const P = $("#oPage"); P.innerHTML = "";
   const intro = el("div", { class: "card" }, el("h2", {}, "How this works"),
-    el("p", {}, "Put your mod folders in order. ", el("b", {}, "Higher in the list wins"), " when two folders have the same file. Per-file picks (set in the Models and Items tabs) win over the order. Press ", el("b", {}, "Build"), " to write the result into one folder."),
+    el("p", {}, el("b", {}, "What you chose in the Models and Gear tabs is what gets built."), " Press ", el("b", {}, "Build"), " to write it all into one folder."),
+    el("p", { class: "note" }, "The order list below only decides files you never chose anything for: when two switched-on mods ship the same file, the higher one wins. You don't need to touch it."),
     el("p", {}, "In the Arctium app, turn off your other mod folders and add just these two once:"),
     el("div", {}, "Mod folder: ", el("code", {}, S.info.outputDir)),
     el("div", {}, "File mapping: ", el("code", {}, winJoin(S.info.appDir, "LoadOrder-mappings.txt"))),
