@@ -1881,7 +1881,9 @@ async function checkMappings(out, files) {
       }
     } catch { continue; }
     for (const fid of txid) {
-      if (!fid || S.casc.has(fid) || S.pathById.has(fid) || lines.has(fid)) continue;
+      if (!fid || S.casc.has(fid) || lines.has(fid)) continue;
+      const known = S.customMap.get(fid)?.path || S.pathById.get(fid);
+      if (known) { if (!inBuild(known)) problems.push(`${lc}: needs ${known} (ID ${fid}), which isn't in your build -> will show bright green. Pick a version of this model that has it, or the original game.`); continue; }
       // unknown custom texture ID: try to guess from new textures in the same folder
       const dir = dirname(lc);
       const cands = [...files.keys()].filter((p) => dirname(p) === dir && p.endsWith(".blp") && !S.idByPath.has(p) && !S.customPaths.has(p));
