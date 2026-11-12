@@ -858,12 +858,16 @@ function hairPanel(P) {
   };
   const n = Object.keys(cfg).length;
   P.append(el("h3", {}, `Hairstyles${n ? ` (${n} replaced)` : ""}`), el("div", { class: "note" },
-    `One row per hairstyle your character can pick in game. "Keep as is" leaves it alone. To replace one, choose a mod (or the original game) and which of its hairstyles to use instead, ` +
-    `e.g. row "Style 2" ← Mod A, "Style 7". Click a row's name to show that hairstyle on the left view. Replacements show on the left view whatever body it shows; the right view never changes. Build puts them on your build's body in game.`));
+    `Replace the hairstyle your character has selected (pick it with the Hair Style option above) with a hairstyle from any mod or the original game. ` +
+    `"Keep as is" leaves it alone. Shown on the left view; the right view never changes. Build puts it in game.`));
   if (n) P.append(el("button", { onclick: async () => { if (!confirm("Set every hairstyle back to \"Keep as is\"?")) return; delete S.profile.hair[lc]; mixCache = null; await saveProfile(); refresh(); } }, "Keep all as is"));
   if (cur.hairErr) P.append(el("div", { class: "note", style: "color:#f88" }, "Could not mix: " + cur.hairErr));
   else if (cur.hairNotes) P.append(el("div", { class: "note" }, cur.hairNotes.join(" · ")));
-  for (const id of [...ids].sort((a, b) => names.has(b) - names.has(a) || a - b)) P.append(row(id));
+  P.append(row(shown));
+  // other hairstyles that are replaced: listed by name, click to switch to one
+  const others = Object.keys(cfg).map(Number).filter((id) => id !== shown && ids.includes(id));
+  if (others.length) P.append(el("div", { class: "note", style: "margin-top:4px" }, "Also replaced: ",
+    ...others.map((id, k) => el("span", { style: "cursor:pointer;text-decoration:underline", title: "Show this hairstyle", onclick: () => { for (const x of ids) cur.geo.on.delete(x); cur.geo.on.add(id); refresh(); } }, label(id) + (k < others.length - 1 ? ", " : "")))));
 }
 async function sideTextures(model, mode) {
   const texs = [];
