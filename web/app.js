@@ -537,7 +537,9 @@ function modelEntries() {
 }
 function renderModelList() {
   const q = $("#mSearch").value.trim().toLowerCase();
-  const list = modelEntries().filter((e) => !q || (e.label + " " + e.dir).toLowerCase().includes(q));
+  // models your WoW version doesn't have can never show up in game, so they're left out
+  const inGame = (e) => { const ms = [...(e.models || [])]; return !ms.length || ms.some((m) => { const f = S.idByPath.get(m); return f === undefined || S.casc.has(f); }); };
+  const list = modelEntries().filter((e) => inGame(e) && (!q || (e.label + " " + e.dir).toLowerCase().includes(q)));
   const box = $("#mList"); box.innerHTML = "";
   const groups = ["Playable characters", "Creatures & NPCs", "Item models"];
   for (const g of groups) {
