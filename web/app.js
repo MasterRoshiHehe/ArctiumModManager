@@ -71,7 +71,9 @@ async function start() {
   await loadListfile();
   busy("Scanning your mod folders...");
   await loadProfile();
+  const moved = await migrateMoved();
   await scanSources();
+  if (moved) await fixMovedRefs(moved);
   await loadMappings();
   if (S.firstRun) { try { await saveProfile(); } catch {} }
   busy(null);
@@ -134,6 +136,70 @@ async function saveProfile() {
   await api("/api/write", { p: profilePath() }, { method: "POST", body: JSON.stringify(S.profile, null, 1) });
 }
 
+// ---------------------------------------------------------------- moved mod folders
+// When mods are reorganized, <mods root>\_reorg_map.json lists where each old folder went. Saved paths in profile.json
+// (load order, picks, hair, swaps, presets) are rewritten to the new places. One old folder can have several new ones.
+const normP = (p) => String(p || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+async function readMoveMap() {
+  let j; try { j = JSON.parse(await apiText("/api/read", { p: winJoin(S.info.modsRoot, "_reorg_map.json") })); } catch { return null; }
+  const ops = Array.isArray(j) ? j : j.ops || j.moves || j.map || [];
+  const pairs = [];
+  const isPath = (v) => typeof v === "string" && /^[a-z]:\\|^\\\\/i.test(v.replace(/\//g, "\\"));
+  const add = (from, to) => { if (isPath(from) && isPath(to)) pairs.push([normP(from), to.replace(/\//g, "\\").replace(/\\+$/, "")]); };
+  if (!Array.isArray(ops) && typeof ops === "object") { for (const [k, v] of Object.entries(ops)) [].concat(v).forEach((t) => add(k, t)); return pairs; }
+  for (const op of ops) {
+    if (Array.isArray(op)) { add(op[0], op[1]); continue; }
+    if (!op || typeof op !== "object") continue;
+    const keys = Object.keys(op);
+    const fk = keys.find((k) => /^(from|src|source|old|orig)/i.test(k)), tk = keys.find((k) => /^(to|dst|dest|target|new)/i.test(k));
+    if (fk && tk) [].concat(op[tk]).forEach((t) => add(op[fk], t));
+  }
+  return pairs;
+}
+function movedTargets(pairs, path) {
+  const [base, ...v] = String(path).split("#"), suffix = v.length ? "#" + v.join("#") : "", b = normP(base);
+  const out = [];
+  for (const [from, to] of pairs) {
+    if (b === from) out.push(to + suffix);
+    else if (b.startsWith(from + "\\")) out.push(to + base.replace(/\//g, "\\").slice(from.length) + suffix);
+    else if (from.startsWith(b + "\\") && !suffix) out.push(to); // an old container folder: everything that came out of it
+  }
+  return [...new Set(out)];
+}
+async function migrateMoved() {
+  const outside = S.profile.sources.filter((s) => !normP(s.path).startsWith(normP(S.info.modsRoot) + "\\"));
+  if (!outside.length) return null;
+  const pairs = await readMoveMap(); if (!pairs || !pairs.length) return null;
+  try { await api("/api/write", { p: winJoin(S.info.appDir, "backups\\profile-before-move.json") }, { method: "POST", body: JSON.stringify(S.profile, null, 1) }); } catch {}
+  const map = new Map(), out = [], seen = new Set();
+  for (const s of S.profile.sources) {
+    const t = normP(s.path).startsWith(normP(S.info.modsRoot) + "\\") ? [] : movedTargets(pairs, s.path);
+    if (t.length) map.set(s.path.toLowerCase(), t);
+    for (const p of t.length ? t : [s.path]) if (!seen.has(p.toLowerCase())) { seen.add(p.toLowerCase()); out.push({ path: p, enabled: s.enabled }); }
+  }
+  if (!map.size) return null;
+  S.profile.sources = out;
+  S.profile.movedFrom = Object.fromEntries(map);
+  await saveProfile();
+  return map;
+}
+// picks / hair / swaps / presets name a source by key: use the new folder that actually has the file
+async function fixMovedRefs(map) {
+  const fix = (key, lc) => {
+    if (!key || key === "@game") return key;
+    const t = map.get(key.toLowerCase()); if (!t) return key;
+    const srcs = t.map((k) => S.sources.find((x) => x.key.toLowerCase() === k.toLowerCase())).filter(Boolean);
+    const hit = (lc && srcs.find((x) => x.files.has(lc))) || srcs[0];
+    return hit ? hit.key : t[0];
+  };
+  const P = S.profile;
+  for (const lc of Object.keys(P.picks)) P.picks[lc] = fix(P.picks[lc], lc);
+  for (const [lc, r] of Object.entries(P.remap || {})) r.src = fix(r.src, r.lc);
+  for (const [lc, cfg] of Object.entries(P.hair || {})) for (const c of Object.values(cfg)) c.src = fix(c.src, lc);
+  for (const byName of Object.values(P.presets || {})) for (const pr of Object.values(byName)) for (const o of pr.overlays || []) o.src = o.src && fix(o.src, o.lc);
+  await saveProfile();
+}
+
 function findRoot(segs) {
   // returns index where the game path starts
   for (let i = 0; i < segs.length - 1; i++) {
@@ -160,6 +226,7 @@ async function scanSources() {
   const scanUnder = async (base) => {
     for (const f of await scanTree(base)) {
       const segs = f.rel.split("/");
+      if (segs[0].startsWith("_")) continue; // _Archives, _covered_by_other_mods ... are not loaded
       const i = findRoot(segs);
       if (i < 0) { // not a game path: keep txt mapping files next to models
         if (/\.txt$/i.test(f.rel)) { const j = segs.findIndex((s) => GAME_TOP.has(s.toLowerCase())); if (j >= 0) addFile(winJoin(base, segs.slice(0, j).join("/")), segs.slice(j).join("/"), f.size); }
