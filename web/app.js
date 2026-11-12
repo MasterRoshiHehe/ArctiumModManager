@@ -805,9 +805,9 @@ function hairPanel(P) {
   const row = (id) => {
     const c = cfg[id];
     const modSel = el("select", { style: "flex:1;min-width:0" });
-    modSel.append(el("option", { value: "" }, "Unchanged (your body's own)"));
+    modSel.append(el("option", { value: "" }, "Keep as is"));
     modSel.append(el("option", { value: "@game", selected: c?.src === "@game" }, "Original game"));
-    for (const d of donors) modSel.append(el("option", { value: d.key, selected: c?.src === d.key }, d.name + (d === body ? " (your body)" : d.enabled ? "" : " (off)")));
+    for (const d of donors) modSel.append(el("option", { value: d.key, title: d.name, selected: c?.src === d.key }, d.name.split(/[\\›]/).map((x) => x.trim()).slice(-2).join(" › ") + (d === body ? " (your body)" : d.enabled ? "" : " (off)")));
     const styleSel = el("select", { style: "width:150px", disabled: !c });
     const fillStyles = async (key, keep) => {
       styleSel.innerHTML = "";
@@ -829,23 +829,20 @@ function hairPanel(P) {
     };
     styleSel.onchange = () => setHair(id, modSel.value, undefined, +styleSel.value);
     if (c) fillStyles(c.src, c.from ?? id); else fillStyles("", 0);
-    return el("div", {},
-      el("div", { class: "note", style: "cursor:pointer;margin-top:6px", title: "Click to show this hairstyle on the left", onclick: () => { for (const x of ids) cur.geo.on.delete(x); cur.geo.on.add(id); refresh(); } },
-        (id === shown ? "▶ " : "") + label(id) + (c ? "  ←  " : "")),
+    return el("div", { style: "margin-top:6px;padding:4px 6px;border-radius:6px;" + (id === shown ? "background:rgba(255,255,255,.06)" : "") },
+      el("div", { class: "note", style: "cursor:pointer", title: "Click to show this hairstyle on the left", onclick: () => { for (const x of ids) cur.geo.on.delete(x); cur.geo.on.add(id); refresh(); } },
+        (id === shown ? "▶ " : "") + label(id) + (id === shown ? " (shown)" : "") + (c ? " · replaced" : "")),
       el("div", { class: "row" }, modSel, styleSel),
       c ? el("label", { title: "Moves the hair so the other model's head bone sits on your body's head bone. Turn off if the hair floats." },
         el("input", { type: "checkbox", checked: c.fit !== false, onchange: (ev) => setHair(id, c.src, ev.target.checked, c.from) }), "Fit to head") : null);
   };
-  P.append(el("h3", {}, "Hairstyles"), el("div", { class: "note" },
-    `Each hairstyle number of your body model (${body ? body.name : "original game"}) can use any hairstyle from any mod (or the original game). ` +
-    `Example: put mod A's hairstyle 7 on your hairstyle 2. Only the left view shows it, when it is set to "Your build"; the right view is never changed. Build writes the combined model into Output.`));
-  P.append(row(shown));
+  const n = Object.keys(cfg).length;
+  P.append(el("h3", {}, `Hairstyles${n ? ` (${n} replaced)` : ""}`), el("div", { class: "note" },
+    `One row per hairstyle your character can pick in game. "Keep as is" leaves it alone. To replace one, choose a mod (or the original game) and which of its hairstyles to use instead, ` +
+    `e.g. row "Style 2" ← Mod A, "Style 7". Click a row's name to show that hairstyle on the left view (set the left view to "Your build" to see replacements). The right view never changes. Build puts it in game.`));
   if (cur.hairErr) P.append(el("div", { class: "note", style: "color:#f88" }, "Could not mix: " + cur.hairErr));
   else if (cur.hairNotes) P.append(el("div", { class: "note" }, cur.hairNotes.join(" · ")));
-  const n = Object.keys(cfg).length;
-  const all = el("details", {}, el("summary", {}, `All hairstyles${n ? ` (${n} changed)` : ""}`));
-  for (const id of [...ids].sort((a, b) => names.has(b) - names.has(a) || a - b)) if (id !== shown) all.append(row(id));
-  P.append(all);
+  for (const id of [...ids].sort((a, b) => names.has(b) - names.has(a) || a - b)) P.append(row(id));
 }
 async function sideTextures(model, mode) {
   const texs = [];
