@@ -371,6 +371,7 @@ async function readRemap(r) {
   return readAbs(winJoin(s.abs, s.files.get(r.lc).rel));
 }
 async function readLC(lc, mode) {
+  if (lc.startsWith("#fid")) return S.casc.readFid(+lc.slice(4));
   const rm = remapOf(lc, mode); if (rm) return readRemap(rm);
   const s = sourceFor(lc, mode);
   if (s) return readAbs(winJoin(s.abs, s.files.get(lc).rel));
@@ -640,7 +641,7 @@ function variationsFor(modelLC) {
   const fid = S.idByPath.get(modelLC);
   const out = new Map();
   for (const mid of CR.modelByFid.get(fid) || []) for (const d of CR.disp.get(mid) || []) {
-    const paths = d.tex.slice(0, 3).map((f) => (f ? lcForFid(f) || null : null));
+    const paths = d.tex.slice(0, 3).map((f) => (f ? lcForFid(f) || (S.casc.has(f) ? "#fid" + f : null) : null)); // "#fid…" = game texture with no known name
     if (!paths.some(Boolean)) continue;
     const key = paths.join("|");
     if (!out.has(key)) out.set(key, { key, paths, displays: [] });
@@ -676,12 +677,22 @@ function defaultSlots(model, dir) {
   if (cur.forcedSlots) { Object.assign(slots, cur.forcedSlots); cur.forcedSlots = null; }
   if (!cur.char) {
     cur.variations = variationsFor(cur.modelLC);
-    if (cur.variations.length) { const v = cur.variations[0]; slots[11] = v.paths[0]; slots[12] = v.paths[1]; slots[13] = v.paths[2]; cur.variation = v.key; }
+    if (cur.variations.length) {
+      // the variation that fills most of the skin slots this model uses; slots it leaves empty are borrowed from the others
+      const fills = (v) => [11, 12, 13].filter((t, k) => want.has(t) && v.paths[k]).length;
+      const v = cur.variations.reduce((a, b) => (fills(b) > fills(a) ? b : a));
+      [11, 12, 13].forEach((t, k) => { slots[t] = v.paths[k] || (want.has(t) && cur.variations.map((x) => x.paths[k]).find(Boolean)) || v.paths[k]; });
+      cur.variation = v.key;
+    }
   }
-  for (const t of want) {
-    if (slots[t] !== undefined) continue;
-    const pref = files.filter((f) => /skin/.test(basename(f))).concat(files.filter((f) => basename(f).startsWith(base)));
-    slots[t] = (t === 11 ? (pref[0] || files[0]) : null) || null;
+  // no NPC data for this model: guess from the folder's textures, a different one per slot, skipping ones the model already uses directly
+  const taken = new Set(model.textures.filter((t) => t.type === 0 && t.fid).map((t) => lcForFid(t.fid)).filter(Boolean));
+  for (const t of [11, 12, 13]) if (slots[t]) taken.add(slots[t]);
+  const pref = [...new Set(files.filter((f) => /skin/.test(basename(f))).concat(files.filter((f) => basename(f).startsWith(base)), files))];
+  for (const t of [...want].sort((a, b) => a - b)) {
+    if (slots[t]) continue;
+    const pick = [11, 12, 13].includes(t) ? pref.find((f) => !taken.has(f)) || (t === 11 ? pref[0] : null) : null;
+    slots[t] = pick || null; if (pick) taken.add(pick);
   }
   return slots;
 }
@@ -1046,7 +1057,7 @@ function renderProps(model, skin) {
       }
     }
     if (cur.variations && cur.variations.length) {
-      const vs = el("select", { onchange: () => { const v = cur.variations.find((x) => x.key === vs.value); cur.variation = v.key; [11, 12, 13].forEach((t, k) => (cur.slots[t] = v.paths[k])); refresh(); } });
+      const vs = el("select", { onchange: () => { const v = cur.variations.find((x) => x.key === vs.value); cur.variation = v.key; [11, 12, 13].forEach((t, k) => (cur.slots[t] = v.paths[k] || cur.variations.map((x) => x.paths[k]).find(Boolean) || null)); refresh(); } });
       for (const v of cur.variations) vs.append(el("option", { value: v.key, selected: cur.variation === v.key }, v.paths.filter(Boolean).map(basename).join(" + ") + `  (${v.displays.length} NPC look${v.displays.length > 1 ? "s" : ""})`));
       P.append(el("label", {}, el("span", { style: "width:90px" }, "Variation"), vs));
     }
