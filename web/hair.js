@@ -110,6 +110,11 @@ export function mixHair(target, donors) {
     let off = [0, 0, 0];
     const th = headPivot(target.bones), dh = headPivot(don.bones);
     if (don.fit !== false && th && dh) off = [th[0] - dh[0], th[1] - dh[1], th[2] - dh[2]];
+    // room check first: a skin can address at most 65,535 vertices, so skip a hairstyle that doesn't fit instead of failing all
+    let need = 0;
+    for (const dr of DS.subs) { const ds = subInfo(dr); if (ds.id !== from || !ds.indexCount) continue; const u = new Set(); for (let k = 0; k < ds.indexCount; k++) u.add(DS.tri[ds.indexStart + k]); need += u.size; }
+    if (!need) { notes.push(`hairstyle ${don.id}: skipped, that model has no hairstyle ${from}`); continue; }
+    if (TS.vmap.length + need > 65535 || maxUsed + 1 + newVerts.length + need > 65535) { notes.push(`hairstyle ${don.id}: skipped, the model is full (too many vertices); replace fewer hairstyles`); continue; }
     // empty the body's own copy
     for (const r of TS.subs) { const i = subInfo(r); if (i.id === don.id) DV(r).setUint16(10, 0, true); }
     let added = 0;
