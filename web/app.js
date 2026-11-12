@@ -80,6 +80,8 @@ async function start() {
   status(`Game ${S.casc.version} · ${S.sources.filter((s) => s.enabled).length} of ${S.sources.length} mod folders on`);
   initViews();
   renderModelList();
+  // the customization tables also tell which creature models are really playable races (Skyborne ...): list them once read
+  loadCreatureTables().then(loadChr).then(() => renderModelList()).catch((e) => console.warn("chr tables", e));
   // gear list is built when the Gear tab opens (it reads the item tables)
   renderOrderPage();
 }
@@ -234,7 +236,9 @@ async function scanSources() {
     let r = roots.get(k); if (!r) roots.set(k, (r = { abs: rootAbs, files: new Map(), unknown: [] }));
     const lc = rel.toLowerCase();
     if (/\.(txt|png|rar|zip|7z|json|db|ini|md|jpg)$/i.test(lc) || /(^|\/)thumbs\.db$/.test(lc)) { r.unknown.push(rel); if (lc.endsWith(".txt")) (r.txts ||= []).push(rel); return; }
-    r.files.set(lc, { rel, size });
+    // some packs leave out the leading "models/" (creature/unk_exp00_.../x.blp): put them where the game expects them
+    const fixed = !S.idByPath.has(lc) && S.idByPath.has("models/" + lc) ? "models/" + lc : lc;
+    r.files.set(fixed, { rel, size });
   };
   const scanUnder = async (base) => {
     const files = (await scanTree(base)).map((f) => ({ ...f, segs: f.rel.split("/") })).filter((f) => !f.segs[0].startsWith("_")); // _Archives ... are not loaded
@@ -469,6 +473,7 @@ function fillSourceSelects(lcs, texPrefix) {
 }
 
 // ---------------------------------------------------------------- model list
+const CUSTOM_RACES = { 7478494: "skyborne female" };
 function modelEntries() {
   const onlyModded = $("#mOnlyModded").checked;
   const entries = new Map(); // key -> {key, group, label, dir, models:Set}
@@ -483,11 +488,19 @@ function modelEntries() {
     const m = /^character\/([a-z]+)\/(male|female)\/\1\2(_hd)?\.m2$/.exec(p);
     if (m && S.casc.has(S.idByPath.get(p))) add("Playable characters", dirname(p), `${m[1]} ${m[2]}`, p);
   }
+  // custom playable races whose body is stored as a creature model (e.g. Skyborne = models/creature/unk_exp00_7478494)
+  if (CHR) for (const fid of CHR.byModelFid.keys()) {
+    const p = S.pathById.get(fid);
+    if (!p || p.startsWith("character/") || !S.casc.has(fid)) continue;
+    add("Playable characters", dirname(p), CUSTOM_RACES[fid] || "custom race " + basename(p).replace(/\.m2$/, ""), p);
+  }
   // everything any mod touches
   for (const s of S.sources) for (const lc of s.files.keys()) {
     const dir = dirname(lc);
     const top = lc.split("/")[0];
-    if (top === "character") { const e = entries.get("Playable characters|" + dir); if (e) e.modded = true; continue; }
+    const pe = entries.get("Playable characters|" + dir);
+    if (pe) { pe.modded = true; continue; }
+    if (top === "character") continue;
     if (lc.startsWith("item/texturecomponents/")) continue; // gear textures: Gear tab
     const group = top === "item" ? "Item models" : "Creatures & NPCs";
     const e = add(group, dir, dir.replace(/^(creature|item\/objectcomponents|models)\//, ""), null);
@@ -535,7 +548,12 @@ async function selectEntry(e) {
   cur.char = /^character\//.test(e.dir) ? parseCharDir(e.dir, cur.modelLC) : null;
   cur.variations = []; cur.variation = null;
   cur.cm = null; cur.custom = null;
-  try { busy("Reading game tables..."); await loadCreatureTables(); if (cur.char) await loadChr(); } catch (err) { console.warn(err); }
+  try {
+    busy("Reading game tables..."); await loadCreatureTables();
+    if (cur.char || e.group === "Playable characters") await loadChr();
+    // custom race stored as a creature model: treat it as a character (customization options, skins)
+    if (!cur.char && e.group === "Playable characters") cur.char = { race: e.label.split(" ")[0], sex: e.label.split(" ")[1] || "", hd: true, custom: true };
+  } catch (err) { console.warn(err); }
   busy(null);
   if (!cur.char) cur.overlays = [];
   fillSourceSelects([...dirFiles(e.dir)], cur.char ? e.dir : null);
