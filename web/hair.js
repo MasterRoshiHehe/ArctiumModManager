@@ -67,8 +67,11 @@ function readM2(u8) {
   const texType = []; for (let i = 0; i < nt; i++) texType.push(d.getUint32(ot + i * 16, true));
   const nl = d.getUint32(0x80, true), ol = d.getUint32(0x84, true);
   const texLookup = []; for (let i = 0; i < nl; i++) texLookup.push(d.getInt16(ol + i * 2, true));
-  return { list, md, nv, verts: md.subarray(ov, ov + nv * 48), combos, texType, texLookup };
+  const tx = chunk(list, "TXID");
+  const txid = []; if (tx) for (let i = 0; i + 4 <= tx.length; i += 4) txid.push(DV(tx).getUint32(i, true));
+  return { list, md, nv, verts: md.subarray(ov, ov + nv * 48), combos, texType, texLookup, texRaw: md.slice(ot, ot + nt * 16), txid, nLookup0: nl };
 }
+const concat = (a, b) => { const o = new Uint8Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; };
 const batchTexType = (m, b) => m.texType[m.texLookup[DV(b).getUint16(16, true)]];
 
 // Ids of the hairstyles (1-99) a skin has
@@ -102,6 +105,14 @@ export function mixHair(target, donors) {
   if (!target.bones || !target.bones.length) throw new Error("the body model's skeleton could not be read");
   let maxUsed = 0; for (const v of TS.vmap) if (v > maxUsed) maxUsed = v;
   const newVerts = []; // Uint8Array(48) each, become global ids maxUsed+1+k
+  // other race's hair: its own hair texture is baked in as a fixed texture (type 0) for the new hair parts
+  const texLookupFor = (fid) => {
+    let ti = T.texType.findIndex((ty, i) => ty === 0 && T.txid[i] === fid);
+    if (ti < 0) { const e = new Uint8Array(16); const h6 = T.texType.indexOf(6); if (h6 >= 0) e.set(T.texRaw.subarray(h6 * 16 + 4, h6 * 16 + 8), 4); T.texRaw = concat(T.texRaw, e); T.texType.push(0); T.txid.length = T.texType.length - 1; T.txid.push(fid); ti = T.texType.length - 1; T.texAdded = true; }
+    let li = T.texLookup.indexOf(ti);
+    if (li < 0) { T.texLookup.push(ti); li = T.texLookup.length - 1; T.texAdded = true; }
+    return li;
+  };
   const tHair = TS.batches.filter((b) => { const s = subInfo(TS.subs[DV(b).getUint16(4, true)]); return s.id > 0 && s.id < 100; });
   // how many vertices each donor hairstyle needs
   const prep = [];
@@ -168,9 +179,13 @@ export function mixHair(target, donors) {
   for (const { don, from, D, DS } of acc) {
     if (!don.bones || !don.bones.length) throw new Error("the donor model's skeleton could not be read");
     const { map, matched } = boneMap(don.bones, target.bones);
-    let off = [0, 0, 0];
+    // position: donor head pivot -> body head pivot (fit), then size around the head and height
     const th = headPivot(target.bones), dh = headPivot(don.bones);
-    if (don.fit !== false && th && dh) off = [th[0] - dh[0], th[1] - dh[1], th[2] - dh[2]];
+    const anchor = dh || [0, 0, 0], dest = don.fit !== false && th && dh ? th : anchor;
+    const sc = don.scale || 1, up = don.up || 0;
+    const xf = (p) => [dest[0] + (p[0] - anchor[0]) * sc, dest[1] + (p[1] - anchor[1]) * sc, dest[2] + (p[2] - anchor[2]) * sc + up];
+    const off = [dest[0] - anchor[0], dest[1] - anchor[1], dest[2] - anchor[2] + up];
+    const texLi = don.texFid ? texLookupFor(don.texFid) : -1;
     let added = 0;
     DS.subs.forEach((dr, di) => {
       const ds = subInfo(dr);
@@ -185,7 +200,7 @@ export function mixHair(target, donors) {
         if (nvx === undefined) {
           const gv = DS.vmap[sv];
           const v = D.verts.slice(gv * 48, gv * 48 + 48), vd = DV(v);
-          for (let a = 0; a < 3; a++) vd.setFloat32(a * 4, vd.getFloat32(a * 4, true) + off[a], true);
+          { const q = xf([0, 1, 2].map((a) => vd.getFloat32(a * 4, true))); for (let a = 0; a < 3; a++) vd.setFloat32(a * 4, q[a], true); }
           const sb = new Uint8Array(4);
           for (let j = 0; j < 4; j++) {
             const tb = map[v[16 + j]] ?? 0;
@@ -215,7 +230,8 @@ export function mixHair(target, donors) {
       d.setUint16(8, iStart & 0xffff, true); d.setUint16(10, tri.length, true);
       d.setUint16(12, slice.length, true); d.setUint16(14, comboStart, true);
       const cb = map[ds.center]; d.setUint16(18, cb ?? slice[0], true);
-      for (const o of [20, 32]) for (let a = 0; a < 3; a++) d.setFloat32(o + a * 4, d.getFloat32(o + a * 4, true) + off[a], true);
+      for (const o of [20, 32]) { const q = xf([0, 1, 2].map((a) => d.getFloat32(o + a * 4, true))); for (let a = 0; a < 3; a++) d.setFloat32(o + a * 4, q[a], true); }
+      if (sc !== 1) d.setFloat32(44, d.getFloat32(44, true) * sc, true);
       const newSub = TS.subs.length; TS.subs.push(r);
       // draw calls: borrow the body's own hair draw settings (texture, material) of the same texture type
       for (const db of DS.batches) {
@@ -227,6 +243,7 @@ export function mixHair(target, donors) {
           || tHair[0];
         if (!tmpl) throw new Error("the body model has no hair to copy settings from");
         const nb = tmpl.slice(); DV(nb).setUint16(4, newSub, true);
+        if (texLi >= 0 && want === 6) { DV(nb).setUint16(14, 1, true); DV(nb).setUint16(16, texLi, true); }
         TS.batches.push(nb);
       }
       added += tri.length / 3;
@@ -241,7 +258,9 @@ function writeM2(T, maxUsed, newVerts) {
   const md = T.md;
   const keep = Math.min(T.nv, maxUsed + 1);
   const nv = T.nv + newVerts.length;
-  const vOff = pad16(md.length), cOff = pad16(vOff + nv * 48), end = cOff + T.combos.length * 2;
+  const vOff = pad16(md.length), cOff = pad16(vOff + nv * 48);
+  const tOff = pad16(cOff + T.combos.length * 2), lOff = pad16(tOff + (T.texAdded ? T.texRaw.length : 0));
+  const end = T.texAdded ? lOff + T.texLookup.length * 2 : cOff + T.combos.length * 2;
   const out = new Uint8Array(end);
   out.set(md);
   out.set(T.verts.subarray(0, keep * 48), vOff);
@@ -251,8 +270,18 @@ function writeM2(T, maxUsed, newVerts) {
   T.combos.forEach((c, i) => d.setUint16(cOff + i * 2, c, true));
   d.setUint32(0x3c, nv, true); d.setUint32(0x40, vOff, true);
   d.setUint32(0x78, T.combos.length, true); d.setUint32(0x7c, cOff, true);
+  if (T.texAdded) {
+    out.set(T.texRaw, tOff); T.texLookup.forEach((x, i) => d.setInt16(lOff + i * 2, x, true));
+    d.setUint32(0x50, T.texType.length, true); d.setUint32(0x54, tOff, true);
+    d.setUint32(0x80, T.texLookup.length, true); d.setUint32(0x84, lOff, true);
+  }
   // re-chunk: MD21 first, the rest unchanged
-  const parts = T.list.map((c) => (c.id === "MD21" ? { id: "MD21", data: out } : c));
+  let parts = T.list.map((c) => (c.id === "MD21" ? { id: "MD21", data: out } : c));
+  if (T.texAdded) {
+    const tx = new Uint8Array(T.txid.length * 4); T.txid.forEach((f, i) => DV(tx).setUint32(i * 4, f || 0, true));
+    if (parts.some((c) => c.id === "TXID")) parts = parts.map((c) => (c.id === "TXID" ? { id: "TXID", data: tx } : c));
+    else parts.push({ id: "TXID", data: tx });
+  }
   const total = parts.reduce((n, c) => n + 8 + c.data.length, 0);
   const f = new Uint8Array(total), fd = DV(f);
   let p = 0;

@@ -822,8 +822,10 @@ function mixedFor(lc, m2b, skinB, mode = "build") {
     const donors = [];
     const own = sourceFor(lc, mode)?.key || "@game";
     for (const [id, c] of Object.entries(cfg)) {
-      if (c.src.toLowerCase() === own.toLowerCase() && (c.from == null || +c.from === +id)) continue; // same hairstyle from the same model: nothing to do
-      const d = await donorData(lc, c.src); donors.push({ id: +id, from: c.from != null ? +c.from : +id, m2: d.m2, skin: d.skin, bones: d.bones, fit: c.fit !== false });
+      const other = c.model && c.model !== lc; // hairstyle from another race / gender
+      if (!other && c.src.toLowerCase() === own.toLowerCase() && (c.from == null || +c.from === +id) && !c.scale && !c.up) continue; // same hairstyle from the same model: nothing to do
+      const d = await donorData(other ? c.model : lc, c.src);
+      donors.push({ id: +id, from: c.from != null ? +c.from : +id, m2: d.m2, skin: d.skin, bones: d.bones, fit: c.fit !== false, scale: c.scale || 1, up: c.up || 0, texFid: other ? c.tex : undefined });
     }
     if (!donors.length) return { m2: m2b, skin: skinB, notes: ["no hairstyle differs from this body's own"] };
     return mixHair({ m2: m2b, skin: skinB, bones: await bonesFor(m2b, mode) }, donors);
@@ -831,9 +833,32 @@ function mixedFor(lc, m2b, skinB, mode = "build") {
   mixCache = { sig, p }; p.catch(() => { if (mixCache && mixCache.sig === sig) mixCache = null; });
   return p;
 }
-async function setHair(id, key, fit, from) {
+// playable body models by race and gender (HD first), for hairstyles from other races
+function charBodies() {
+  if (S.charBodies) return S.charBodies;
+  const out = new Map(); // "race/gender" -> lc
+  for (const [lc, fid] of S.idByPath) {
+    const m = /^character\/([a-z0-9]+)\/(female|male)\/\1\2(_hd)?\.m2$/.exec(lc);
+    if (!m || !S.casc.has(fid)) continue;
+    const k = m[1] + "/" + m[2];
+    if (!out.has(k) || m[3]) out.set(k, lc);
+  }
+  return (S.charBodies = out);
+}
+const cmOf = (lc) => (CHR ? CHR.modelFor(S.idByPath.get(lc)) : undefined);
+// the hair texture the game would use for hairstyle `geo` with hair colour choice `color` on character model cm
+function hairTexFid(cm, geo, color) {
+  if (!CHR || !cm) return null;
+  const opts = CHR.options(cm), sel = CHR.defaults(cm);
+  const so = opts.find((o) => /hair ?style|hairstyle/i.test(o.name)), co = opts.find((o) => /hair ?colou?r/i.test(o.name));
+  if (so) for (const ch of so.choices) if ((CHR.elemsByChoice.get(ch.id) || []).some((e) => { const g = e.v[2] && CHR.t.geoset.get(e.v[2]); return g && g.v[0] === 0 && g.v[1] === geo; })) { sel[so.id] = ch.id; break; }
+  if (co && color) sel[co.id] = color;
+  const l = CHR.resolve(cm, sel).layers.filter((x) => x.type === 6).sort((a, b) => a.layer - b.layer)[0];
+  return l ? l.fid : null;
+}
+async function setHair(id, key, fit, from, extra) {
   const all = S.profile.hair, c = (all[cur.modelLC] ||= {});
-  if (!key) delete c[id]; else c[id] = { src: key, from: from ?? c[id]?.from ?? id, fit: fit ?? c[id]?.fit ?? true };
+  if (!key) delete c[id]; else { c[id] = { ...(c[id] || {}), src: key, from: from ?? c[id]?.from ?? id, fit: fit ?? c[id]?.fit ?? true, ...(extra || {}) }; for (const k of Object.keys(c[id])) if (c[id][k] === undefined) delete c[id][k]; }
   if (!Object.keys(c).length) delete all[cur.modelLC];
   for (const x of cur.geo.ids) if (x > 0 && x < 100) cur.geo.on.delete(x);
   cur.geo.on.add(id);
@@ -847,40 +872,90 @@ function hairPanel(P) {
   const shown = ids.find((x) => cur.geo.on.has(x)) ?? ids[0];
   const names = cur.cm ? CHR.hairNames(cur.cm) : new Map();
   const label = (id) => names.has(id) ? "Style " + names.get(id) : "Part " + id;
-  // one row per hairstyle slot of your body: [mod] [which of its hairstyles]
+  // one row per hairstyle slot of your body: [race] [gender] / [mod] [which of its hairstyles] / [hair colour, other races only]
+  const bodies = charBodies();
+  const myRG = /^character\/([a-z0-9]+)\/(female|male)\//.exec(lc);
   const row = (id) => {
     const c = cfg[id];
+    let donorLc = c?.model || lc;
+    const other = () => donorLc !== lc;
+    const rg = /^character\/([a-z0-9]+)\/(female|male)\//.exec(donorLc) || myRG;
+    const races = [...new Set([...bodies.keys()].map((k) => k.split("/")[0]))].sort();
+    const raceSel = el("select", { style: "flex:1;min-width:0", title: "Take the hairstyle from this race" }), genderSel = el("select", { style: "width:110px" });
+    const nice = (x) => x === "scourge" ? "Undead" : x.replace(/^./, (ch) => ch.toUpperCase());
+    for (const r of races) raceSel.append(el("option", { value: r, selected: rg && r === rg[1] }, nice(r) + (myRG && r === myRG[1] ? " (yours)" : "")));
+    const fillGenders = (keep) => { genderSel.innerHTML = ""; for (const g of ["female", "male"]) if (bodies.has(raceSel.value + "/" + g)) genderSel.append(el("option", { value: g, selected: g === keep }, nice(g))); };
+    fillGenders(rg ? rg[2] : "female");
+    if (!rg) { raceSel.disabled = genderSel.disabled = true; }
     const modSel = el("select", { style: "flex:1;min-width:0" });
-    modSel.append(el("option", { value: "" }, "Keep as is"));
-    modSel.append(el("option", { value: "@game", selected: c?.src === "@game" }, "Original game"));
-    for (const d of donors) modSel.append(el("option", { value: d.key, title: d.name, selected: c?.src === d.key }, d.name.split(/[\\›]/).map((x) => x.trim()).slice(-2).join(" › ") + (d === body ? " (your body)" : d.enabled ? "" : " (off)")));
+    const fillMods = (keep) => {
+      modSel.innerHTML = "";
+      modSel.append(el("option", { value: "" }, "Keep as is"));
+      modSel.append(el("option", { value: "@game", selected: keep === "@game" }, "Original game"));
+      for (const d of S.sources.filter((x) => x.files.has(donorLc))) modSel.append(el("option", { value: d.key, title: d.name, selected: keep === d.key }, d.name.split(/[\\›]/).map((x) => x.trim()).slice(-2).join(" › ") + (d === body && !other() ? " (your body)" : d.enabled ? "" : " (off)")));
+      if (keep && modSel.value !== keep) modSel.value = "@game";
+    };
+    fillMods(c?.src || "");
     const styleSel = el("select", { style: "width:150px", disabled: !c });
+    const colorSel = el("select", { style: "flex:1;min-width:0", title: "Hair colour for a hairstyle from another race: it keeps this colour in game, whatever colour you pick there" });
+    const colorRow = el("div", { class: "row", style: "display:none" }, el("span", { class: "note", style: "width:70px" }, "Colour"), colorSel);
+    const fillColors = () => {
+      colorSel.innerHTML = ""; colorRow.style.display = other() ? "" : "none";
+      if (!other()) return;
+      const co = CHR && CHR.options(cmOf(donorLc) || 0).find((o) => /hair ?colou?r/i.test(o.name));
+      for (const ch of co ? co.choices : []) colorSel.append(el("option", { value: ch.id, selected: c?.color === ch.id }, ch.n + (ch.name ? " · " + ch.name : "")));
+    };
+    fillColors();
+    const save = (from) => {
+      const key = modSel.value;
+      if (!key) return setHair(id, null);
+      const col = other() ? +colorSel.value || undefined : undefined;
+      return setHair(id, key, undefined, from, other() ? { model: donorLc, color: col, tex: hairTexFid(cmOf(donorLc), from, col) || undefined } : { model: undefined, color: undefined, tex: undefined });
+    };
     const fillStyles = async (key, keep) => {
       styleSel.innerHTML = "";
       if (!key) { styleSel.append(el("option", { value: "" }, "-")); styleSel.disabled = true; return; }
       styleSel.append(el("option", { value: "" }, "reading..."));
-      let have; try { have = [...(await donorData(lc, key)).ids].sort((a, b) => a - b); } catch { have = []; }
+      let have; try { have = [...(await donorData(donorLc, key)).ids].sort((a, b) => a - b); } catch { have = []; }
+      const nm = other() ? (CHR && cmOf(donorLc) ? CHR.hairNames(cmOf(donorLc)) : new Map()) : names;
       styleSel.innerHTML = "";
       if (!have.length) { styleSel.append(el("option", { value: "" }, "(no hairstyles)")); styleSel.disabled = true; return; }
-      for (const h of have) styleSel.append(el("option", { value: h, selected: h === keep }, label(h)));
+      for (const h of have) styleSel.append(el("option", { value: h, selected: h === keep }, nm.has(h) ? "Style " + nm.get(h) : "Part " + h));
       if (!have.includes(keep)) styleSel.value = String(have.includes(id) ? id : have[0]);
       styleSel.disabled = false;
       return +styleSel.value;
     };
-    modSel.onchange = async () => {
-      const key = modSel.value;
-      if (!key) return setHair(id, null);
-      const from = await fillStyles(key, c?.from ?? id);
-      if (from) setHair(id, key, undefined, from);
+    const pickBody = async () => {
+      const k = raceSel.value + "/" + genderSel.value;
+      donorLc = bodies.get(k) || lc;
+      fillMods(other() ? "@game" : (c?.model && c.model !== lc ? "" : c?.src || ""));
+      fillColors();
+      const from = await fillStyles(modSel.value, other() ? 1 : c?.from ?? id);
+      if (modSel.value && from) save(from); else if (!modSel.value && c) setHair(id, null);
     };
-    styleSel.onchange = () => setHair(id, modSel.value, undefined, +styleSel.value);
+    raceSel.onchange = () => { fillGenders(genderSel.value); pickBody(); };
+    genderSel.onchange = pickBody;
+    modSel.onchange = async () => {
+      if (!modSel.value) return setHair(id, null);
+      const from = await fillStyles(modSel.value, c?.from ?? id);
+      if (from) save(from);
+    };
+    styleSel.onchange = () => save(+styleSel.value);
+    colorSel.onchange = () => save(+styleSel.value);
     if (c) fillStyles(c.src, c.from ?? id); else fillStyles("", 0);
+    const pct = Math.round((c?.scale || 1) * 100), up = c?.up || 0;
+    const sizeIn = el("input", { type: "range", min: 70, max: 130, step: 1, value: pct, style: "flex:1", onchange: (ev) => setHair(id, c.src, undefined, c.from, { scale: +ev.target.value === 100 ? undefined : +ev.target.value / 100 }) });
+    const upIn = el("input", { type: "range", min: -20, max: 20, step: 1, value: Math.round(up * 100), style: "flex:1", onchange: (ev) => setHair(id, c.src, undefined, c.from, { up: +ev.target.value === 0 ? undefined : +ev.target.value / 100 }) });
     return el("div", { style: "margin-top:6px;padding:4px 6px;border-radius:6px;" + (id === shown ? "background:rgba(255,255,255,.06)" : "") },
       el("div", { class: "note", style: "cursor:pointer", title: "Click to show this hairstyle on the left", onclick: () => { for (const x of ids) cur.geo.on.delete(x); cur.geo.on.add(id); refresh(); } },
         (id === shown ? "▶ " : "") + label(id) + (id === shown ? " (shown)" : "") + (c ? " · replaced" : "")),
+      el("div", { class: "row" }, raceSel, genderSel),
       el("div", { class: "row" }, modSel, styleSel),
+      colorRow,
       c ? el("label", { title: "Moves the hair so the other model's head bone sits on your body's head bone. Turn off if the hair floats." },
-        el("input", { type: "checkbox", checked: c.fit !== false, onchange: (ev) => setHair(id, c.src, ev.target.checked, c.from) }), "Fit to head") : null);
+        el("input", { type: "checkbox", checked: c.fit !== false, onchange: (ev) => setHair(id, c.src, ev.target.checked, c.from) }), "Fit to head") : null,
+      c ? el("div", { class: "row", title: "Size of the hair around the head (100% = as made)" }, el("span", { class: "note", style: "width:70px" }, `Size ${pct}%`), sizeIn) : null,
+      c ? el("div", { class: "row", title: "Moves the hair up or down" }, el("span", { class: "note", style: "width:70px" }, `Height ${up > 0 ? "+" : ""}${Math.round(up * 100)}`), upIn) : null);
   };
   const n = Object.keys(cfg).length;
   P.append(el("h3", {}, `Hairstyles${n ? ` (${n} replaced)` : ""}`), el("div", { class: "note" },
