@@ -624,7 +624,7 @@ async function composeChr(type, mode) {
     skip: cur.slots.underwear === false ? isUnder : null,
     after: type !== 1 ? null : async (g, rect) => {
       const order = [5, 6, 7, 3, 4, 0, 1, 2];
-      for (const sec of order) for (const o of cur.overlays.filter((x) => x.section === sec)) {
+      for (const sec of order) for (const o of cur.overlays.filter((x) => x.section === sec && !x.hidden)) {
         const m = gearMode(o, mode);
         const r = rect(sec); if (!r) continue;
         try { g.drawImage(imgToCanvas(await imgLC(o.lc, m)), r[0], r[1], r[2], r[3]); } catch {}
@@ -762,7 +762,7 @@ async function composeBody(mode) {
   if (cur.slots.face) { await draw(`${pre}facelower${cur.slots.face}_${cur.slots.skin}${sfx}.blp`, 9); await draw(`${pre}faceupper${cur.slots.face}_${cur.slots.skin}${sfx}.blp`, 10); }
   if (cur.slots.underwear) { await draw(`${pre}nakedpelvisskin00_${cur.slots.skin}${sfx}.blp`, 5); await draw(`${pre}nakedtorsoskin00_${cur.slots.skin}${sfx}.blp`, 3); }
   const order = [5, 6, 7, 3, 4, 0, 1, 2]; // legs, feet, chest, arms, hands
-  for (const sec of order) for (const o of cur.overlays.filter((x) => x.section === sec)) {
+  for (const sec of order) for (const o of cur.overlays.filter((x) => x.section === sec && !x.hidden)) {
     const m = gearMode(o, mode);
     await draw(o.lc, sec, m);
   }
@@ -986,7 +986,7 @@ function presetOf() {
     custom: { ...(cur.custom || {}) },
     slots: { ...cur.slots },
     geo: cur.geo ? [...cur.geo.on] : [],
-    overlays: cur.overlays.map((o) => ({ section: o.section, lc: o.lc, src: o.src ? o.src.key : null, setKey: o.setKey, label: o.label })),
+    overlays: cur.overlays.map((o) => ({ section: o.section, lc: o.lc, src: o.src ? o.src.key : null, setKey: o.setKey, label: o.label, hidden: !!o.hidden })),
   };
 }
 function applyPreset(p) {
@@ -1062,7 +1062,9 @@ function renderProps(model, skin) {
         for (const [k, os] of groups) {
           const label = os[0].label || basename(os[0].lc).replace(/_(au|al|ha|tu|tl|lu|ll|fo)(_[fmu])?\.blp$/, "");
           const parts = [...new Set(os.map((o) => pieceOf(o)))].map(pieceLabel).join(", ");
-          P.append(el("div", { class: "row", title: os.map((o) => basename(o.lc)).join("\n") }, el("span", { class: "pill" }, parts), el("span", { style: "flex:1;overflow:hidden;text-overflow:ellipsis" }, label), el("button", { onclick: () => { cur.overlays = cur.overlays.filter((o) => !os.includes(o)); refresh(); renderGearList(); } }, "×")));
+          const hid = os.every((o) => o.hidden);
+          P.append(el("div", { class: "row", style: hid ? "opacity:.5" : "", title: os.map((o) => basename(o.lc)).join("\n") }, el("span", { class: "pill" }, parts), el("span", { style: "flex:1;overflow:hidden;text-overflow:ellipsis" }, label),
+            el("button", { title: hid ? "Show this piece again" : "Hide this piece (it stays in the list)", onclick: () => { for (const o of os) o.hidden = !hid; refresh(); } }, hid ? "Show" : "Hide")));
         }
         P.append(el("button", { onclick: () => { cur.overlays = []; refresh(); } }, "Take everything off"));
       }
