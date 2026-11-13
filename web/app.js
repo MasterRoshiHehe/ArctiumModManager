@@ -856,6 +856,23 @@ function hairTexFid(cm, geo, color) {
   const l = CHR.resolve(cm, sel).layers.filter((x) => x.type === 6).sort((a, b) => a.layer - b.layer)[0];
   return l ? l.fid : null;
 }
+// average colour of a hair texture's painted pixels (for the colour list and matching your own hair colour)
+const hairAvgCache = new Map();
+function hairAvg(fid) {
+  if (!fid) return Promise.resolve(null);
+  if (!hairAvgCache.has(fid)) hairAvgCache.set(fid, imgFid(fid, "build").then((im) => {
+    let r = 0, g = 0, b = 0, n = 0; const px = im.rgba, step = Math.max(1, Math.floor(px.length / 4 / 20000)) * 4;
+    for (let i = 0; i < px.length; i += step) if (px[i + 3] > 128) { r += px[i]; g += px[i + 1]; b += px[i + 2]; n++; }
+    return n ? [r / n, g / n, b / n].map(Math.round) : null;
+  }).catch(() => null));
+  return hairAvgCache.get(fid);
+}
+// the hair texture your character currently has (from the customization on the left)
+function bodyHairFid() {
+  if (!CHR || !cur.cm || !cur.custom) return null;
+  const l = CHR.resolve(cur.cm, cur.custom).layers.filter((x) => x.type === 6).sort((a, b) => a.layer - b.layer)[0];
+  return l ? l.fid : null;
+}
 async function setHair(id, key, fit, from, extra) {
   const all = S.profile.hair, c = (all[cur.modelLC] ||= {});
   if (!key) delete c[id]; else { c[id] = { ...(c[id] || {}), src: key, from: from ?? c[id]?.from ?? id, fit: fit ?? c[id]?.fit ?? true, ...(extra || {}) }; for (const k of Object.keys(c[id])) if (c[id][k] === undefined) delete c[id][k]; }
@@ -899,15 +916,26 @@ function hairPanel(P) {
     const styleSel = el("select", { style: "width:150px", disabled: !c });
     const colorSel = el("select", { style: "flex:1;min-width:0", title: "Hair colour for a hairstyle from another race: it keeps this colour in game, whatever colour you pick there" });
     const colorRow = el("div", { class: "row", style: "display:none" }, el("span", { class: "note", style: "width:70px" }, "Colour"), colorSel);
-    const fillColors = () => {
+    const fillColors = async () => {
       colorSel.innerHTML = ""; colorRow.style.display = other() ? "" : "none";
       if (!other()) return;
-      const co = CHR && CHR.options(cmOf(donorLc) || 0).find((o) => /hair ?colou?r/i.test(o.name));
-      for (const ch of co ? co.choices : []) colorSel.append(el("option", { value: ch.id, selected: c?.color === ch.id }, ch.n + (ch.name ? " · " + ch.name : "")));
+      const cm = cmOf(donorLc), co = CHR && CHR.options(cm || 0).find((o) => /hair ?colou?r/i.test(o.name));
+      const mine = await hairAvg(bodyHairFid());
+      let best = null, bestD = Infinity;
+      for (const ch of co ? co.choices : []) {
+        const fid = hairTexFid(cm, c?.from ?? 1, ch.id), rgb = await hairAvg(fid);
+        const hex = rgb ? "#" + rgb.map((x) => x.toString(16).padStart(2, "0")).join("") : "";
+        const light = rgb && rgb[0] * 0.3 + rgb[1] * 0.59 + rgb[2] * 0.11 > 140;
+        colorSel.append(el("option", { value: ch.id, style: hex ? `background:${hex};color:${light ? "#000" : "#fff"}` : "" }, `Colour ${ch.n}${ch.name ? " · " + ch.name : ""}`));
+        if (rgb && mine) { const dd = rgb.reduce((a, x, i) => a + (x - mine[i]) ** 2, 0); if (dd < bestD) { bestD = dd; best = ch.id; } }
+      }
+      colorSel.value = String(c?.color && c.model === donorLc ? c.color : best ?? co?.choices[0]?.id ?? "");
+      const o = colorSel.selectedOptions[0]; colorSel.style.cssText = "flex:1;min-width:0;" + (o ? o.style.cssText : "");
     };
-    fillColors();
-    const save = (from) => {
+    const colorsReady = fillColors();
+    const save = async (from) => {
       const key = modSel.value;
+      if (key && other() && !colorSel.value) await fillColors();
       if (!key) return setHair(id, null);
       const col = other() ? +colorSel.value || undefined : undefined;
       return setHair(id, key, undefined, from, other() ? { model: donorLc, color: col, tex: hairTexFid(cmOf(donorLc), from, col) || undefined } : { model: undefined, color: undefined, tex: undefined });
@@ -929,7 +957,7 @@ function hairPanel(P) {
       const k = raceSel.value + "/" + genderSel.value;
       donorLc = bodies.get(k) || lc;
       fillMods(other() ? "@game" : (c?.model && c.model !== lc ? "" : c?.src || ""));
-      fillColors();
+      await fillColors();
       const from = await fillStyles(modSel.value, other() ? 1 : c?.from ?? id);
       if (modSel.value && from) save(from); else if (!modSel.value && c) setHair(id, null);
     };
@@ -941,7 +969,7 @@ function hairPanel(P) {
       if (from) save(from);
     };
     styleSel.onchange = () => save(+styleSel.value);
-    colorSel.onchange = () => save(+styleSel.value);
+    colorSel.onchange = () => { const o = colorSel.selectedOptions[0]; colorSel.style.cssText = "flex:1;min-width:0;" + (o ? o.style.cssText : ""); save(+styleSel.value); };
     if (c) fillStyles(c.src, c.from ?? id); else fillStyles("", 0);
     const pct = Math.round((c?.scale || 1) * 100), up = c?.up || 0;
     const sizeIn = el("input", { type: "range", min: 70, max: 130, step: 1, value: pct, style: "flex:1", onchange: (ev) => setHair(id, c.src, undefined, c.from, { scale: +ev.target.value === 100 ? undefined : +ev.target.value / 100 }) });
