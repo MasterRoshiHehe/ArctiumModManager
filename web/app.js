@@ -1340,7 +1340,9 @@ async function renderGearList() {
     const mat = el("select", { id: "gMat", onchange: renderGearList });
     for (const t of ["All materials", "Cloth", "Leather", "Mail", "Plate", "Other (shirts, tabards ...)"]) mat.append(el("option", { value: t === "All materials" ? "" : t }, t));
     const orph = el("label", { class: "note" }, el("input", { type: "checkbox", id: "gOrphans", onchange: renderGearList }), " Show textures no game item uses");
-    selSrc.after(mat, sort, only, orph);
+    let one = false; try { one = localStorage.getItem("gOnePiece") === "1"; } catch {}
+    const onePiece = el("label", { class: "note", title: "Clicking an item tries on just that piece, not its whole set" }, el("input", { type: "checkbox", id: "gOnePiece", checked: one, onchange: (ev) => { try { localStorage.setItem("gOnePiece", ev.target.checked ? "1" : "0"); } catch {} } }), " Try on only the clicked piece");
+    selSrc.after(mat, sort, only, orph, onePiece);
   }
   if (!IT.loaded) { try { await loadItems(); } catch (e) { console.warn(e); busy(null); } }
   gearItemNames();
@@ -1362,7 +1364,7 @@ async function renderGearList() {
   const row = (it, sub) => {
     const swapped = it.files.filter((f) => S.profile.remap[f.lc]);
     const st = buildState(it.modded.length ? [...new Set([...it.modded, ...swapped])] : swapped.length ? swapped : []);
-    return el("div", { class: "it" + (cur.gearItem === it.id ? " on" : ""), title: it.modded.map((f) => basename(f.lc)).join("\n"), onclick: () => selectGearItem(it, mode === "set" && !!setNameOf(it)) },
+    return el("div", { class: "it" + (cur.gearItem === it.id ? " on" : ""), title: it.modded.map((f) => basename(f.lc)).join("\n"), onclick: () => selectGearItem(it, mode === "set" && !!setNameOf(it) && !$("#gOnePiece")?.checked) },
       el("span", { style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }, it.name, el("span", { class: "note" }, " · " + sub)),
       el("span", { class: "pill" + (st === "all" ? " on" : st === "some" ? " warn" : ""), style: "margin-left:auto;white-space:nowrap" }, st === "none" && !it.modded.length ? "No mods" : st === "all" ? "✓ In build" : st === "some" ? "◐ Partly" : "Original"));
   };
