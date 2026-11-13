@@ -1351,7 +1351,7 @@ async function renderGearList() {
   const mode = $("#gSort").value;
   const q = $("#gSearch").value.trim().toLowerCase();
   const box = $("#gList"); box.innerHTML = "";
-  box.append(el("div", { class: "note", style: "padding:6px 10px" }, "Click an item to try it on and choose its version on the right. ✓ In build = a mod version goes into your game when you press Build; Original = the game's own look."));
+  box.append(el("div", { class: "note", style: "padding:6px 10px" }, "Click an item to try it on and choose its version on the right. Ctrl-click adds a piece to what you're already trying on (it replaces only pieces on the same body part); Ctrl-click it again to take it off. ✓ In build = a mod version goes into your game when you press Build; Original = the game's own look."));
   const srcOk = (files) => selSrc.value === "@in" ? buildState(files) !== "none" : selSrc.value === "@out" ? buildState(files) !== "all" : (!selSrc.value || files.some((f) => sourcesTouching([f.lc]).some((x) => x.key === selSrc.value)));
   const onlyModded = $("#gOnlyModded").checked;
   const matSel = $("#gMat").value;
@@ -1364,7 +1364,7 @@ async function renderGearList() {
   const row = (it, sub) => {
     const swapped = it.files.filter((f) => S.profile.remap[f.lc]);
     const st = buildState(it.modded.length ? [...new Set([...it.modded, ...swapped])] : swapped.length ? swapped : []);
-    return el("div", { class: "it" + (cur.gearItem === it.id ? " on" : ""), title: it.modded.map((f) => basename(f.lc)).join("\n"), onclick: () => selectGearItem(it, mode === "set" && !!setNameOf(it) && !$("#gOnePiece")?.checked) },
+    return el("div", { class: "it" + (cur.gearItem === it.id ? " on" : ""), title: it.modded.map((f) => basename(f.lc)).join("\n"), onclick: (ev) => selectGearItem(it, mode === "set" && !!setNameOf(it) && !$("#gOnePiece")?.checked && !ev.ctrlKey, ev.ctrlKey) },
       el("span", { style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }, it.name, el("span", { class: "note" }, " · " + sub)),
       el("span", { class: "pill" + (st === "all" ? " on" : st === "some" ? " warn" : ""), style: "margin-left:auto;white-space:nowrap" }, st === "none" && !it.modded.length ? "No mods" : st === "all" ? "✓ In build" : st === "some" ? "◐ Partly" : "Original"));
   };
@@ -1443,12 +1443,15 @@ function setNameOf(it) {
   }
   return IT.looks.get(it.id) || null;
 }
-function selectGearItem(it, wholeSet = false) {
+// add = Ctrl-click: put this piece on top of what's being tried on (it replaces only pieces on the same body parts); Ctrl-click again takes it off
+function selectGearItem(it, wholeSet = false, add = false) {
   if (!cur.char) { status("Pick a playable character on the Models tab first."); switchTab("models"); return; }
   cur.gearItem = it.id; cur.gearItemObj = it; cur.swapping = null; cur.swapPreview = null;
   const want = cur.char.sex === "female" ? "f" : "m";
   const g = (lc) => (/_([fmu])\.blp$/.exec(lc) || [])[1] || "u";
-  cur.overlays = []; // preview only the clicked item (or its whole set)
+  if (add && cur.overlays.some((o) => o.setKey === "item:" + it.id)) { cur.overlays = cur.overlays.filter((o) => o.setKey !== "item:" + it.id); renderGearList(); refresh(); return; }
+  const kept = add ? cur.overlays : [];
+  cur.overlays = []; // preview only the clicked item (or its whole set), plus what was kept with Ctrl
   const setName = wholeSet ? setNameOf(it) : null;
   // pieces are layered like in game (pants under boots and belt, chest under belt ...), so a belt no longer wipes the pants
   const LAYER = ["Shirt", "Legs", "Chest", "Feet", "Wrists", "Hands", "Waist", "Robe", "Tabard"];
@@ -1459,6 +1462,7 @@ function selectGearItem(it, wholeSet = false) {
     for (const f of p.files) { const old = bySec.get(f.section); if (!old || g(f.lc) === want || (g(old.lc) !== want && g(f.lc) === "u")) bySec.set(f.section, f); }
     for (const [sec, f] of bySec) cur.overlays.push({ section: sec, lc: f.lc, src: null, setKey: "item:" + p.id, label: p.name });
   }
+  if (kept.length) { const secs = new Set(cur.overlays.map((o) => o.section)); cur.overlays = kept.filter((o) => !secs.has(o.section)).concat(cur.overlays); }
   renderGearList();
   refresh();
 }
